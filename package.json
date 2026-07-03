@@ -1,0 +1,18 @@
+{
+    "scripts": {
+        "build": "millennium-ttc --build prod",
+        "dev": "millennium-ttc --build dev",
+        "postbuild": "cp -r .millennium/Dist/* frontend/ 2>/dev/null || true"
+    },
+    "devDependencies": {
+        "@steambrew/client": "^5.8.4",
+        "@steambrew/ttc": "^3.2.6",
+        "@types/react": "19.1.1",
+        "@types/react-dom": "19.1.1"
+    },
+    "type": "module",
+    "name": "startup-movies",
+    "version": "1.0.0",
+    "main": "./frontend/index.tsx",
+    "description": "Startup Movies plugin for desktop Steam"
+}
