@@ -1,0 +1,7 @@
+{
+    "name": "startup-movies",
+    "common_name": "Startup Movies",
+    "description": "Plays startup movies from uioverrides/movies/ on Steam launch, just like Steam Deck. Place .webm files in {SteamPath}/config/uioverrides/movies/",
+    "backendType": "lua",
+    "version": "1.0.0"
+}
