@@ -69,6 +69,7 @@ function StartupMovieOverlay() {
     const [videoUrl, setVideoUrl] = React.useState<string | null>(null);
     const [visible, setVisible] = React.useState(true);
     const [blackScreen, setBlackScreen] = React.useState(_firstLoad);
+    const [videoReady, setVideoReady] = React.useState(false);
     const [objectFit, setObjectFit] = React.useState(_objectFit);
     const videoRef = React.useRef<HTMLVideoElement>(null);
     const fadingRef = React.useRef(false);
@@ -77,6 +78,7 @@ function StartupMovieOverlay() {
         _overlayPlay = (url: string) => {
             setVisible(true);
             fadingRef.current = false;
+            setVideoReady(false);
             setVideoUrl(url);
         };
         _setBlackScreen = setBlackScreen;
@@ -85,6 +87,7 @@ function StartupMovieOverlay() {
         if (_pendingPlayUrl) {
             setVisible(true);
             fadingRef.current = false;
+            setVideoReady(false);
             setVideoUrl(_pendingPlayUrl);
             _pendingPlayUrl = null;
         }
@@ -94,6 +97,10 @@ function StartupMovieOverlay() {
             _setBlackScreen = null;
             _onObjectFitChange = null;
         };
+    }, []);
+
+    const handleVideoReady = React.useCallback(() => {
+        setVideoReady(true);
     }, []);
 
     const dismiss = React.useCallback(() => {
@@ -108,6 +115,7 @@ function StartupMovieOverlay() {
                 videoRef.current.load();
             }
             setVideoUrl(null);
+            setVideoReady(false);
             fadingRef.current = false;
             (window as any).__showSteamUI?.();
         }, 400);
@@ -129,9 +137,11 @@ function StartupMovieOverlay() {
         autoPlay
         muted
         playsInline
-        style={{ width: "100%", height: "100%", objectFit }}
+        style={{ width: "100%", height: "100%", objectFit, opacity: videoReady ? 1 : 0, transition: "opacity 0.5s ease" }}
         onEnded={dismiss}
         onError={dismiss}
+        onLoadedData={handleVideoReady}
+        onCanPlay={handleVideoReady}
         />
         )}
         </div>
