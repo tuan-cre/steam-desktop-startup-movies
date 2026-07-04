@@ -215,6 +215,8 @@ end
 local function on_load()
     logger:info("Startup Movies plugin loaded")
 
+    millennium.add_browser_js("frontend/steam-hide.js")
+
     find_python()
     find_ffmpeg()
     get_movies()

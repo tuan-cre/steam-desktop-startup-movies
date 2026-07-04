@@ -100,6 +100,7 @@ function StartupMovieOverlay() {
         if (fadingRef.current) return;
         fadingRef.current = true;
         setVisible(false);
+        setBlackScreen(false);
         setTimeout(() => {
             if (videoRef.current) {
                 videoRef.current.pause();
@@ -108,6 +109,7 @@ function StartupMovieOverlay() {
             }
             setVideoUrl(null);
             fadingRef.current = false;
+            (window as any).__showSteamUI?.();
         }, 400);
     }, []);
 
@@ -148,11 +150,14 @@ function playMovie(url: string) {
 }
 
 async function tryStartupPlayback() {
-    if (sessionStorage.getItem(PLAYED_KEY)) return;
+    if (sessionStorage.getItem(PLAYED_KEY)) {
+        (window as any).__showSteamUI?.();
+        return;
+    }
 
     const movies = await loadMovies();
     if (!movies.length) {
-        _setBlackScreen?.(false);
+        (window as any).__showSteamUI?.();
         return;
     }
 
@@ -163,7 +168,7 @@ async function tryStartupPlayback() {
     if (movie?.url) {
         playMovie(movie.url);
     } else {
-        _setBlackScreen?.(false);
+        (window as any).__showSteamUI?.();
     }
 }
 
