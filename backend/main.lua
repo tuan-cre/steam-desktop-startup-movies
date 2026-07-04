@@ -8,6 +8,42 @@ local server_pid = nil
 local server_url = nil
 local cached_movies = nil
 local cached_count = 0
+local python_bin = nil
+local ffmpeg_bin = nil
+
+local function find_python()
+    if python_bin then return python_bin end
+    local handle = io.popen("which python3 2>/dev/null")
+    if handle then
+        local result = handle:read("*a")
+        handle:close()
+        result = result:match("^%s*(.-)%s*$")
+        if result and result ~= "" then
+            python_bin = result
+            logger:info("Found python3: " .. python_bin)
+            return python_bin
+        end
+    end
+    logger:error("python3 not found on PATH - HTTP server will not start")
+    return nil
+end
+
+local function find_ffmpeg()
+    if ffmpeg_bin then return ffmpeg_bin end
+    local handle = io.popen("which ffmpeg 2>/dev/null")
+    if handle then
+        local result = handle:read("*a")
+        handle:close()
+        result = result:match("^%s*(.-)%s*$")
+        if result and result ~= "" then
+            ffmpeg_bin = result
+            logger:info("Found ffmpeg: " .. ffmpeg_bin)
+            return ffmpeg_bin
+        end
+    end
+    logger:warn("ffmpeg not found on PATH - thumbnail generation disabled")
+    return nil
+end
 
 local function ensure_movies_dir()
     if movies_path then
@@ -42,7 +78,7 @@ local function ensure_movies_dir()
 end
 
 local function generate_thumbnail(movie_path, movie_name)
-    if not thumbs_path then return nil end
+    if not thumbs_path or not ffmpeg_bin then return nil end
 
     local base = movie_name:sub(1, -(#movie_name:match("%.([^%.]+)$") or 0) - 2)
     local thumb_name = base .. ".jpg"
@@ -50,8 +86,8 @@ local function generate_thumbnail(movie_path, movie_name)
 
     if not fs.exists(thumb_path) then
         local cmd = string.format(
-            '/usr/sbin/ffmpeg -y -i "%s" -ss 00:00:01 -vframes 1 -q:v 2 "%s" 2>/dev/null &',
-            movie_path, thumb_path
+            '"%s" -y -i "%s" -ss 00:00:01 -vframes 1 -q:v 2 "%s" 2>/dev/null &',
+            ffmpeg_bin, movie_path, thumb_path
         )
         os.execute(cmd)
         return nil
@@ -96,6 +132,19 @@ function get_movies()
     local path = ensure_movies_dir()
     if not path then return "[]" end
 
+    if server_pid then
+        local alive = io.popen("kill -0 " .. server_pid .. " 2>/dev/null && echo yes || echo no")
+        local status = alive:read("*a")
+        alive:close()
+        if not status:find("yes") then
+            logger:warn("HTTP server (pid=" .. server_pid .. ") died, restarting...")
+            server_pid = nil
+            server_url = nil
+            cached_movies = nil
+            start_http_server()
+        end
+    end
+
     local entries, err = fs.list(path)
     if not entries then
         logger:error("Failed to list movies: " .. tostring(err))
@@ -132,34 +181,42 @@ end
 
 local function start_http_server()
     if not movies_path then return nil end
+    if not python_bin then return nil end
 
-    local port = 18080
-    local cmd = string.format('python3 -m http.server %d --directory "%s" > /dev/null 2>&1 & echo $!', port, movies_path)
-    local handle = io.popen(cmd)
-    local pid_str = handle:read("*a")
-    handle:close()
+    local base_port = 18080
+    local max_tries = 6
 
-    local pid = tonumber(pid_str:match("%d+"))
-    if pid then
-        os.execute("sleep 0.3")
-        local alive = io.popen("kill -0 " .. pid .. " 2>/dev/null && echo yes || echo no")
-        local status = alive:read("*a")
-        alive:close()
-        if status:find("yes") then
-            server_pid = pid
-            server_url = string.format("http://127.0.0.1:%d/", port)
-            logger:info(string.format("Movie HTTP server on port %d (pid=%d)", port, pid))
-            return server_url
+    for i = 0, max_tries - 1 do
+        local port = base_port + i
+        local cmd = string.format('%s -m http.server %d --directory "%s" > /dev/null 2>&1 & echo $!', python_bin, port, movies_path)
+        local handle = io.popen(cmd)
+        local pid_str = handle:read("*a")
+        handle:close()
+
+        local pid = tonumber(pid_str:match("%d+"))
+        if pid then
+            os.execute("sleep 0.3")
+            local alive = io.popen("kill -0 " .. pid .. " 2>/dev/null && echo yes || echo no")
+            local status = alive:read("*a")
+            alive:close()
+            if status:find("yes") then
+                server_pid = pid
+                server_url = string.format("http://127.0.0.1:%d/", port)
+                logger:info(string.format("Movie HTTP server on port %d (pid=%d)", port, pid))
+                return server_url
+            end
         end
     end
 
-    logger:warn("Failed to start movie HTTP server on port " .. port)
+    logger:error("Failed to start movie HTTP server on ports " .. base_port .. "-" .. (base_port + max_tries - 1))
     return nil
 end
 
 local function on_load()
     logger:info("Startup Movies plugin loaded")
 
+    find_python()
+    find_ffmpeg()
     get_movies()
     logger:info("Found " .. cached_count .. " movie files")
 
@@ -177,6 +234,15 @@ local function on_unload()
     end
 end
 
+function get_status()
+    return json_encode({
+        has_python = python_bin ~= nil,
+        has_ffmpeg = ffmpeg_bin ~= nil,
+        server_running = server_pid ~= nil,
+        movie_count = cached_count
+    })
+end
+
 function log_message(message)
     logger:info(message)
 end
@@ -185,5 +251,6 @@ return {
     on_load = on_load,
     on_unload = on_unload,
     get_movies = get_movies,
+    get_status = get_status,
     log_message = log_message
 }
