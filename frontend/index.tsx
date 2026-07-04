@@ -12,21 +12,17 @@ import React from "react";
 
 const OVERLAY_ID = "StartupMovieOverlay";
 const PLAYED_KEY = "startup-movies-played-this-session";
+const OBJECT_FIT_KEY = "startup-movies-object-fit";
+const MOVIE_KEY = "startup-movies-selected";
 
 let _overlayPlay: ((url: string) => void) | null = null;
 let _pendingPlayUrl: string | null = null;
+let _objectFit: "contain" | "cover" | "fill" = (localStorage.getItem(OBJECT_FIT_KEY) as any) || "contain";
+let _onObjectFitChange: ((v: "contain" | "cover" | "fill") => void) | null = null;
 
-async function frontendLog(...msg: any[]) {
+async function callBackend(method: string) {
     try {
-        const str = msg.map(m => typeof m === "object" ? JSON.stringify(m) : String(m)).join(" ");
-        await Millennium.callServerMethod("log_message", { message: str });
-    } catch {}
-}
-
-async function callBackend(method: string, ...args: any[]) {
-    try {
-        const kwargs = args.length ? {0: args[0], 1: args[1], 2: args[2]} : {};
-        let result = await Millennium.callServerMethod(method, kwargs);
+        let result = await Millennium.callServerMethod(method, {});
         if (typeof result === "string") {
             try { result = JSON.parse(result); } catch {}
         }
@@ -36,9 +32,19 @@ async function callBackend(method: string, ...args: any[]) {
     }
 }
 
+let _cachedMovies: any[] | null = null;
+
 async function loadMovies() {
+    if (_cachedMovies) return _cachedMovies;
     const result = await callBackend("get_movies");
-    return Array.isArray(result) ? result : [];
+    _cachedMovies = Array.isArray(result) ? result : [];
+    return _cachedMovies;
+}
+
+function formatSize(bytes: number): string {
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB";
+    return (bytes / 1048576).toFixed(1) + " MB";
 }
 
 const overlayStyle: React.CSSProperties = {
@@ -54,57 +60,73 @@ const overlayStyle: React.CSSProperties = {
     cursor: "pointer",
     isolation: "isolate",
     transform: "translateZ(0)",
+    transition: "opacity 0.4s ease",
 };
 
 function StartupMovieOverlay() {
     const [videoUrl, setVideoUrl] = React.useState<string | null>(null);
+    const [visible, setVisible] = React.useState(true);
+    const [objectFit, setObjectFit] = React.useState(_objectFit);
     const videoRef = React.useRef<HTMLVideoElement>(null);
+    const fadingRef = React.useRef(false);
 
     React.useEffect(() => {
-        _overlayPlay = (url: string) => setVideoUrl(url);
+        _overlayPlay = (url: string) => {
+            setVisible(true);
+            fadingRef.current = false;
+            setVideoUrl(url);
+        };
+        _onObjectFitChange = setObjectFit;
 
         if (_pendingPlayUrl) {
+            setVisible(true);
+            fadingRef.current = false;
             setVideoUrl(_pendingPlayUrl);
             _pendingPlayUrl = null;
         }
 
         return () => {
             _overlayPlay = null;
+            _onObjectFitChange = null;
         };
     }, []);
 
-    React.useEffect(() => {
-        if (!videoUrl) return;
-        const root = document.getElementById(OVERLAY_ID);
-        if (root) root.style.display = "flex";
-    }, [videoUrl]);
-
     const dismiss = React.useCallback(() => {
-        if (videoRef.current) {
-            videoRef.current.pause();
-            videoRef.current.removeAttribute("src");
-            videoRef.current.load();
-        }
-        setVideoUrl(null);
-
-        const root = document.getElementById(OVERLAY_ID);
-        if (root) root.style.display = "none";
+        if (fadingRef.current) return;
+        fadingRef.current = true;
+        setVisible(false);
+        setTimeout(() => {
+            if (videoRef.current) {
+                videoRef.current.pause();
+                videoRef.current.removeAttribute("src");
+                videoRef.current.load();
+            }
+            setVideoUrl(null);
+            fadingRef.current = false;
+        }, 400);
     }, []);
 
-    if (!videoUrl) return null;
-
     return (
-        <div id={OVERLAY_ID} style={overlayStyle}>
+        <div
+            id={OVERLAY_ID}
+            style={{
+                ...overlayStyle,
+                opacity: videoUrl && visible ? 1 : 0,
+                pointerEvents: videoUrl && visible ? "auto" : "none",
+            }}
+        >
+        {videoUrl && (
         <video
         ref={videoRef}
         src={videoUrl}
         autoPlay
         muted
         playsInline
-        style={{ width: "100%", height: "100%", objectFit: "contain" }}
+        style={{ width: "100%", height: "100%", objectFit }}
         onEnded={dismiss}
         onError={dismiss}
         />
+        )}
         </div>
     );
 }
@@ -123,46 +145,89 @@ function playMovie(url: string) {
 async function tryStartupPlayback() {
     if (sessionStorage.getItem(PLAYED_KEY)) return;
 
-    const t0 = performance.now();
     const movies = await loadMovies();
-    frontendLog(`Got ${movies.length} movies in ${(performance.now() - t0).toFixed(0)}ms`);
-
     if (!movies.length) return;
 
     sessionStorage.setItem(PLAYED_KEY, "1");
 
-    if (movies[0].url) {
-        frontendLog(`Playing: ${movies[0].url}`);
-        playMovie(movies[0].url);
-    }
+    const saved = localStorage.getItem(MOVIE_KEY);
+    const movie = saved ? movies.find((m: any) => m.name === saved) : movies[0];
+    if (movie?.url) playMovie(movie.url);
 }
 
 tryStartupPlayback();
 
 function Panel() {
     const [movies, setMovies] = React.useState<any[]>([]);
-    const [selected, setSelected] = React.useState("");
+    const [selected, setSelected] = React.useState(localStorage.getItem(MOVIE_KEY) || "");
+    const [objectFit, setObjectFit] = React.useState(_objectFit);
 
     React.useEffect(() => {
         loadMovies().then(setMovies);
     }, []);
 
-    return (
-        <PanelSection title="Startup Movies">
-        <PanelSectionRow>
-        <Dropdown
-        rgOptions={movies.filter(m => m.url).map(m => ({ label: m.name, data: m.url }))}
-        selectedOption={selected}
-        onChange={(v) => setSelected(v.data)}
-        />
-        </PanelSectionRow>
+    const handleMovie = (v: { data: string }) => {
+        setSelected(v.data);
+        localStorage.setItem(MOVIE_KEY, v.data);
+    };
 
-        <PanelSectionRow>
-        <span onClick={() => selected && playMovie(selected)}>
-        Preview
-        </span>
-        </PanelSectionRow>
+    const handleObjectFit = (v: { data: string }) => {
+        const val = v.data as "contain" | "cover" | "fill";
+        setObjectFit(val);
+        _objectFit = val;
+        localStorage.setItem(OBJECT_FIT_KEY, val);
+        _onObjectFitChange?.(val);
+    };
+
+    const selectedMovie = movies.find((m: any) => m.name === selected);
+    const thumbUrl = selectedMovie?.thumb || null;
+
+    return (
+        <>
+        <PanelSection title="Movie">
+            <PanelSectionRow>
+                <Dropdown
+                    rgOptions={movies.map(m => ({
+                        label: `${m.name.replace(/\.[^.]+$/, "")} (${formatSize(m.size)})`,
+                        data: m.name
+                    }))}
+                    selectedOption={selected}
+                    onChange={handleMovie}
+                />
+            </PanelSectionRow>
+
+            {thumbUrl && (
+                <PanelSectionRow>
+                    <div style={{ display: "flex", justifyContent: "center" }}>
+                        <img
+                            src={thumbUrl}
+                            style={{
+                                width: "200px",
+                                height: "112px",
+                                objectFit: "contain",
+                                borderRadius: "4px",
+                                display: "block"
+                            }}
+                        />
+                    </div>
+                </PanelSectionRow>
+            )}
         </PanelSection>
+
+        <PanelSection title="Video Fit">
+            <PanelSectionRow>
+                <Dropdown
+                    rgOptions={[
+                        { label: "Contain (letterbox)", data: "contain" },
+                        { label: "Cover (crop)", data: "cover" },
+                        { label: "Fill (stretch)", data: "fill" },
+                    ]}
+                    selectedOption={objectFit}
+                    onChange={handleObjectFit}
+                />
+            </PanelSectionRow>
+        </PanelSection>
+        </>
     );
 }
 

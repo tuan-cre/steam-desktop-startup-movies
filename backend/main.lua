@@ -3,6 +3,7 @@ local fs = require("fs")
 local logger = require("logger")
 
 local movies_path = nil
+local thumbs_path = nil
 local server_pid = nil
 local server_url = nil
 local cached_movies = nil
@@ -27,10 +28,39 @@ local function ensure_movies_dir()
     end
 
     movies_path = path
+
+    local thumbs = fs.join(path, "thumbs")
+    os.execute('mkdir -p "' .. thumbs .. '" 2>/dev/null')
+    if fs.exists(thumbs) then
+        thumbs_path = thumbs
+        logger:info("Thumbnails directory: " .. thumbs)
+    else
+        logger:warn("Could not create thumbnails directory: " .. thumbs)
+    end
+
     return movies_path
 end
 
-local function json_encode(obj)
+local function generate_thumbnail(movie_path, movie_name)
+    if not thumbs_path then return nil end
+
+    local base = movie_name:sub(1, -(#movie_name:match("%.([^%.]+)$") or 0) - 2)
+    local thumb_name = base .. ".jpg"
+    local thumb_path = fs.join(thumbs_path, thumb_name)
+
+    if not fs.exists(thumb_path) then
+        local cmd = string.format(
+            '/usr/sbin/ffmpeg -y -i "%s" -ss 00:00:01 -vframes 1 -q:v 2 "%s" 2>/dev/null &',
+            movie_path, thumb_path
+        )
+        os.execute(cmd)
+        return nil
+    end
+
+    return server_url and (server_url .. "thumbs/" .. thumb_name) or nil
+end
+
+function json_encode(obj)
     if type(obj) == "string" then
         return '"' .. obj:gsub('"', '\\"'):gsub('\n', '\\n'):gsub('\r', '\\r'):gsub('\t', '\\t') .. '"'
     elseif type(obj) == "number" then
@@ -83,10 +113,12 @@ function get_movies()
                 if not seen[base] then
                     seen[base] = true
                     local url = server_url and (server_url .. name) or nil
+                    local thumb = generate_thumbnail(fs.join(path, name), name)
                     table.insert(result, {
                         name = name,
                         size = entry.size,
-                        url = url
+                        url = url,
+                        thumb = thumb
                     })
                 end
             end

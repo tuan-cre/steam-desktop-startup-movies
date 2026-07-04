@@ -4,3 +4,4 @@ millennium/
 frontend/index.js
 dist/
 *.log
+movies/
