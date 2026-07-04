@@ -1,4 +1,6 @@
-document.documentElement.style.opacity = '0';
 window.__showSteamUI = function() {
-    document.documentElement.style.opacity = '1';
+    var links = document.querySelectorAll('link[href*="steam-hide.css"]');
+    links.forEach(function(l) { l.remove(); });
+    var s = document.getElementById('startup-movies-hide');
+    if (s) s.remove();
 };
