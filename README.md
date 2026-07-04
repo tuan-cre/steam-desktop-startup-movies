@@ -1,11 +1,15 @@
-# Startup Movies
+# Steam Desktop Startup Movies
 
-A [Millennium](https://millennium.dev/) plugin that plays a startup movie on Steam launch, similar to the Steam Deck experience.
+A [Millennium](https://millennium.dev/) plugin that plays a custom startup movie on Steam desktop launch — just like the Steam Deck startup animation, but for your PC.
+
+## Why This Plugin?
+
+Steam only supports startup movies in Big Picture mode. This plugin brings that experience to the regular desktop Steam client. Drop in a video, restart Steam, and enjoy your custom intro every time.
 
 ## Installation
 
-1. Clone or download this repository
-2. Place it in your Millennium plugins directory (`~/.local/share/millennium/plugins/`)
+1. Install [Millennium](https://millennium.dev/) (v3+)
+2. Clone or download this repository into your Millennium plugins directory (`~/.local/share/millennium/plugins/`)
 3. Place `.webm` or `.mp4` video files in the plugin's `movies/` folder
 4. Restart Steam
 
@@ -28,8 +32,8 @@ Drop any `.webm` or `.mp4` file into the `movies/` folder. The plugin will detec
 
 Open the plugin panel from Millennium's plugin settings:
 
-- **Movie** — select which video to play at startup (shows file size)
-- **Video Fit** — how the video scales to fill the screen
+- **Movie** — select which video to play at startup (shows file size and thumbnail)
+- **Video Fit** — how the video scales to fill the screen (contain, cover, or fill)
 
 ## Requirements
 
@@ -38,6 +42,12 @@ Open the plugin panel from Millennium's plugin settings:
 - ffmpeg (optional, for thumbnail generation)
 
 If either dependency is missing, the plugin will show a status message in the config panel explaining what's unavailable.
+
+## Troubleshooting
+
+- **No movies appear** — Make sure `.webm` or `.mp4` files are in the `movies/` folder inside the plugin directory
+- **Video doesn't play** — Check that Python 3 is installed and available on your PATH
+- **Thumbnails missing** — Install ffmpeg for automatic thumbnail generation
 
 ## License
 
