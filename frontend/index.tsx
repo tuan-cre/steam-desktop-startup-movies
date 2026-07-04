@@ -19,6 +19,8 @@ let _overlayPlay: ((url: string) => void) | null = null;
 let _pendingPlayUrl: string | null = null;
 let _objectFit: "contain" | "cover" | "fill" = (localStorage.getItem(OBJECT_FIT_KEY) as any) || "contain";
 let _onObjectFitChange: ((v: "contain" | "cover" | "fill") => void) | null = null;
+let _firstLoad = !sessionStorage.getItem(PLAYED_KEY);
+let _setBlackScreen: ((v: boolean) => void) | null = null;
 
 async function callBackend(method: string) {
     try {
@@ -66,6 +68,7 @@ const overlayStyle: React.CSSProperties = {
 function StartupMovieOverlay() {
     const [videoUrl, setVideoUrl] = React.useState<string | null>(null);
     const [visible, setVisible] = React.useState(true);
+    const [blackScreen, setBlackScreen] = React.useState(_firstLoad);
     const [objectFit, setObjectFit] = React.useState(_objectFit);
     const videoRef = React.useRef<HTMLVideoElement>(null);
     const fadingRef = React.useRef(false);
@@ -76,6 +79,7 @@ function StartupMovieOverlay() {
             fadingRef.current = false;
             setVideoUrl(url);
         };
+        _setBlackScreen = setBlackScreen;
         _onObjectFitChange = setObjectFit;
 
         if (_pendingPlayUrl) {
@@ -87,6 +91,7 @@ function StartupMovieOverlay() {
 
         return () => {
             _overlayPlay = null;
+            _setBlackScreen = null;
             _onObjectFitChange = null;
         };
     }, []);
@@ -108,12 +113,12 @@ function StartupMovieOverlay() {
 
     return (
         <div
-            id={OVERLAY_ID}
-            style={{
-                ...overlayStyle,
-                opacity: videoUrl && visible ? 1 : 0,
-                pointerEvents: videoUrl && visible ? "auto" : "none",
-            }}
+        id={OVERLAY_ID}
+        style={{
+            ...overlayStyle,
+            opacity: ((videoUrl && visible) || (blackScreen && visible)) ? 1 : 0,
+            pointerEvents: ((videoUrl && visible) || (blackScreen && visible)) ? "auto" : "none",
+        }}
         >
         {videoUrl && (
         <video
@@ -146,13 +151,20 @@ async function tryStartupPlayback() {
     if (sessionStorage.getItem(PLAYED_KEY)) return;
 
     const movies = await loadMovies();
-    if (!movies.length) return;
+    if (!movies.length) {
+        _setBlackScreen?.(false);
+        return;
+    }
 
     sessionStorage.setItem(PLAYED_KEY, "1");
 
     const saved = localStorage.getItem(MOVIE_KEY);
     const movie = saved ? movies.find((m: any) => m.name === saved) : movies[0];
-    if (movie?.url) playMovie(movie.url);
+    if (movie?.url) {
+        playMovie(movie.url);
+    } else {
+        _setBlackScreen?.(false);
+    }
 }
 
 tryStartupPlayback();
