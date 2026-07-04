@@ -11,18 +11,15 @@ import {
 import React from "react";
 
 const OVERLAY_ID = "StartupMovieOverlay";
-const STORAGE_KEY = "startup-movies-selected";
 const PLAYED_KEY = "startup-movies-played-this-session";
 
 let _overlayPlay: ((url: string) => void) | null = null;
 let _pendingPlayUrl: string | null = null;
 
-async function backendLog(...msg: any[]) {
+async function frontendLog(...msg: any[]) {
     try {
         const str = msg.map(m => typeof m === "object" ? JSON.stringify(m) : String(m)).join(" ");
-        await Millennium.callServerMethod("log_message", {
-            message: `[FRONTEND] ${str}`
-        });
+        await Millennium.callServerMethod("log_message", { message: str });
     } catch {}
 }
 
@@ -118,10 +115,7 @@ routerHook.addGlobalComponent(
     EUIMode.Desktop
 );
 
-async function playMovie(name: string) {
-    const url = await callBackend("get_movie_url", name);
-    if (!url) return;
-
+function playMovie(url: string) {
     if (_overlayPlay) _overlayPlay(url);
     else _pendingPlayUrl = url;
 }
@@ -129,23 +123,21 @@ async function playMovie(name: string) {
 async function tryStartupPlayback() {
     if (sessionStorage.getItem(PLAYED_KEY)) return;
 
+    const t0 = performance.now();
     const movies = await loadMovies();
+    frontendLog(`Got ${movies.length} movies in ${(performance.now() - t0).toFixed(0)}ms`);
+
     if (!movies.length) return;
 
     sessionStorage.setItem(PLAYED_KEY, "1");
 
-    setTimeout(() => {
-        playMovie(movies[0].name);
-    }, 500);
+    if (movies[0].url) {
+        frontendLog(`Playing: ${movies[0].url}`);
+        playMovie(movies[0].url);
+    }
 }
 
-if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", () => {
-        setTimeout(tryStartupPlayback, 1500);
-    });
-} else {
-    setTimeout(tryStartupPlayback, 1500);
-}
+tryStartupPlayback();
 
 function Panel() {
     const [movies, setMovies] = React.useState<any[]>([]);
@@ -159,7 +151,7 @@ function Panel() {
         <PanelSection title="Startup Movies">
         <PanelSectionRow>
         <Dropdown
-        rgOptions={movies.map(m => ({ label: m.name, data: m.name }))}
+        rgOptions={movies.filter(m => m.url).map(m => ({ label: m.name, data: m.url }))}
         selectedOption={selected}
         onChange={(v) => setSelected(v.data)}
         />
