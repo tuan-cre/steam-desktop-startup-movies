@@ -161,9 +161,11 @@ function Panel() {
     const [movies, setMovies] = React.useState<any[]>([]);
     const [selected, setSelected] = React.useState(localStorage.getItem(MOVIE_KEY) || "");
     const [objectFit, setObjectFit] = React.useState(_objectFit);
+    const [status, setStatus] = React.useState<any>(null);
 
     React.useEffect(() => {
         loadMovies().then(setMovies);
+        callBackend("get_status").then(setStatus);
     }, []);
 
     const handleMovie = (v: { data: string }) => {
@@ -182,9 +184,27 @@ function Panel() {
     const selectedMovie = movies.find((m: any) => m.name === selected);
     const thumbUrl = selectedMovie?.thumb || null;
 
+    const warnings: string[] = [];
+    if (status) {
+        if (!status.has_python) warnings.push("python3 not found - HTTP server unavailable");
+        if (!status.has_ffmpeg) warnings.push("ffmpeg not found - thumbnails disabled");
+        if (status.has_python && !status.server_running) warnings.push("HTTP server is not running");
+    }
+
     return (
         <>
+        {warnings.length > 0 && (
+            <PanelSection title="Status">
+                <PanelSectionRow>
+                    <div style={{ color: "#ff6b6b", fontSize: "12px", lineHeight: "1.5" }}>
+                        {warnings.map((w, i) => <div key={i}>{w}</div>)}
+                    </div>
+                </PanelSectionRow>
+            </PanelSection>
+        )}
+
         <PanelSection title="Movie">
+            {movies.length > 0 ? (
             <PanelSectionRow>
                 <Dropdown
                     rgOptions={movies.map(m => ({
@@ -195,6 +215,13 @@ function Panel() {
                     onChange={handleMovie}
                 />
             </PanelSectionRow>
+            ) : (
+            <PanelSectionRow>
+                <div style={{ color: "#888", fontSize: "12px" }}>
+                    No movies found. Place .webm or .mp4 files in the plugin's movies/ folder.
+                </div>
+            </PanelSectionRow>
+            )}
 
             {thumbUrl && (
                 <PanelSectionRow>
