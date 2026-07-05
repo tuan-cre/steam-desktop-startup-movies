@@ -14,6 +14,8 @@ const OVERLAY_ID = "StartupMovieOverlay";
 const PLAYED_KEY = "startup-movies-played-this-session";
 const OBJECT_FIT_KEY = "startup-movies-object-fit";
 const MOVIE_KEY = "startup-movies-selected";
+const TRANSITION_KEY = "startup-movies-transition";
+const MODE_KEY = "startup-movies-mode";
 
 let _overlayPlay: ((url: string) => void) | null = null;
 let _pendingPlayUrl: string | null = null;
@@ -21,6 +23,9 @@ let _objectFit: "contain" | "cover" | "fill" = (localStorage.getItem(OBJECT_FIT_
 let _onObjectFitChange: ((v: "contain" | "cover" | "fill") => void) | null = null;
 let _firstLoad = !sessionStorage.getItem(PLAYED_KEY);
 let _setBlackScreen: ((v: boolean) => void) | null = null;
+let _transition: "fade" | "none" = (localStorage.getItem(TRANSITION_KEY) as any) || "fade";
+let _mode: "default" | "shuffle" = (localStorage.getItem(MODE_KEY) as any) || "default";
+let _onTransitionChange: ((v: "fade" | "none") => void) | null = null;
 
 async function callBackend(method: string) {
     try {
@@ -71,6 +76,7 @@ function StartupMovieOverlay() {
     const [blackScreen, setBlackScreen] = React.useState(_firstLoad);
     const [videoReady, setVideoReady] = React.useState(false);
     const [objectFit, setObjectFit] = React.useState(_objectFit);
+    const [transition, setTransition] = React.useState(_transition);
     const videoRef = React.useRef<HTMLVideoElement>(null);
     const fadingRef = React.useRef(false);
 
@@ -83,6 +89,7 @@ function StartupMovieOverlay() {
         };
         _setBlackScreen = setBlackScreen;
         _onObjectFitChange = setObjectFit;
+        _onTransitionChange = setTransition;
 
         if (_pendingPlayUrl) {
             setVisible(true);
@@ -96,12 +103,16 @@ function StartupMovieOverlay() {
             _overlayPlay = null;
             _setBlackScreen = null;
             _onObjectFitChange = null;
+            _onTransitionChange = null;
         };
     }, []);
 
     const handleVideoReady = React.useCallback(() => {
         setVideoReady(true);
     }, []);
+
+    const isFade = transition === "fade";
+    const dismissTimeout = isFade ? 400 : 0;
 
     const dismiss = React.useCallback(() => {
         if (fadingRef.current) return;
@@ -118,8 +129,8 @@ function StartupMovieOverlay() {
             setVideoReady(false);
             fadingRef.current = false;
             (window as any).__showSteamUI?.();
-        }, 400);
-    }, []);
+        }, dismissTimeout);
+    }, [dismissTimeout]);
 
     return (
         <div
@@ -128,6 +139,7 @@ function StartupMovieOverlay() {
             ...overlayStyle,
             opacity: ((videoUrl && visible) || (blackScreen && visible)) ? 1 : 0,
             pointerEvents: ((videoUrl && visible) || (blackScreen && visible)) ? "auto" : "none",
+            transition: transition === "fade" ? "opacity 0.4s ease" : "none",
         }}
         >
         {videoUrl && (
@@ -137,7 +149,7 @@ function StartupMovieOverlay() {
         autoPlay
         muted
         playsInline
-        style={{ width: "100%", height: "100%", objectFit, opacity: videoReady ? 1 : 0, transition: "opacity 0.5s ease" }}
+        style={{ width: "100%", height: "100%", objectFit, opacity: videoReady ? 1 : 0, transition: transition === "fade" ? "opacity 0.5s ease" : "none" }}
         onEnded={dismiss}
         onError={dismiss}
         onLoadedData={handleVideoReady}
@@ -173,8 +185,13 @@ async function tryStartupPlayback() {
 
     sessionStorage.setItem(PLAYED_KEY, "1");
 
-    const saved = localStorage.getItem(MOVIE_KEY);
-    const movie = saved ? movies.find((m: any) => m.name === saved) : movies[0];
+    let movie: any;
+    if (_mode === "shuffle") {
+        movie = movies[Math.floor(Math.random() * movies.length)];
+    } else {
+        const saved = localStorage.getItem(MOVIE_KEY);
+        movie = saved ? movies.find((m: any) => m.name === saved) : movies[0];
+    }
     if (movie?.url) {
         playMovie(movie.url);
     } else {
@@ -188,6 +205,8 @@ function Panel() {
     const [movies, setMovies] = React.useState<any[]>([]);
     const [selected, setSelected] = React.useState(localStorage.getItem(MOVIE_KEY) || "");
     const [objectFit, setObjectFit] = React.useState(_objectFit);
+    const [transition, setTransition] = React.useState(_transition);
+    const [mode, setMode] = React.useState(_mode);
     const [status, setStatus] = React.useState<any>(null);
 
     React.useEffect(() => {
@@ -206,6 +225,21 @@ function Panel() {
         _objectFit = val;
         localStorage.setItem(OBJECT_FIT_KEY, val);
         _onObjectFitChange?.(val);
+    };
+
+    const handleTransition = (v: { data: string }) => {
+        const val = v.data as "fade" | "none";
+        setTransition(val);
+        _transition = val;
+        localStorage.setItem(TRANSITION_KEY, val);
+        _onTransitionChange?.(val);
+    };
+
+    const handleMode = (v: { data: string }) => {
+        const val = v.data as "default" | "shuffle";
+        setMode(val);
+        _mode = val;
+        localStorage.setItem(MODE_KEY, val);
     };
 
     const selectedMovie = movies.find((m: any) => m.name === selected);
@@ -278,6 +312,32 @@ function Panel() {
                     ]}
                     selectedOption={objectFit}
                     onChange={handleObjectFit}
+                />
+            </PanelSectionRow>
+        </PanelSection>
+
+        <PanelSection title="Transition">
+            <PanelSectionRow>
+                <Dropdown
+                    rgOptions={[
+                        { label: "Fade", data: "fade" },
+                        { label: "None", data: "none" },
+                    ]}
+                    selectedOption={transition}
+                    onChange={handleTransition}
+                />
+            </PanelSectionRow>
+        </PanelSection>
+
+        <PanelSection title="Playback Mode">
+            <PanelSectionRow>
+                <Dropdown
+                    rgOptions={[
+                        { label: "Static", data: "default" },
+                        { label: "Shuffle", data: "shuffle" },
+                    ]}
+                    selectedOption={mode}
+                    onChange={handleMode}
                 />
             </PanelSectionRow>
         </PanelSection>
