@@ -96,6 +96,9 @@ function StartupMovieOverlay() {
     const logCountRef = React.useRef(0);
 
     React.useEffect(() => {
+        var prehide = document.getElementById('millennium-prehide');
+        if (prehide) { prehide.remove(); console.log("[startup-movies] removed millennium-prehide"); }
+
         const c = ++logCountRef.current;
         console.log("[startup-movies] overlay state", { c, videoUrl, visible, blackScreen, videoReady, audioEnabled, firstLoad: _firstLoad });
 
