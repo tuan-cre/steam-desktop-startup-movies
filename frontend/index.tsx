@@ -16,6 +16,7 @@ const OBJECT_FIT_KEY = "startup-movies-object-fit";
 const MOVIE_KEY = "startup-movies-selected";
 const TRANSITION_KEY = "startup-movies-transition";
 const MODE_KEY = "startup-movies-mode";
+const AUDIO_KEY = "startup-movies-audio";
 
 let _overlayPlay: ((url: string) => void) | null = null;
 let _pendingPlayUrl: string | null = null;
@@ -26,6 +27,8 @@ let _setBlackScreen: ((v: boolean) => void) | null = null;
 let _transition: "fade" | "none" = (localStorage.getItem(TRANSITION_KEY) as any) || "fade";
 let _mode: "default" | "shuffle" = (localStorage.getItem(MODE_KEY) as any) || "default";
 let _onTransitionChange: ((v: "fade" | "none") => void) | null = null;
+let _audioEnabled: boolean = localStorage.getItem(AUDIO_KEY) === "true";
+let _onAudioChange: ((v: boolean) => void) | null = null;
 
 async function callBackend(method: string) {
     try {
@@ -77,6 +80,7 @@ function StartupMovieOverlay() {
     const [videoReady, setVideoReady] = React.useState(false);
     const [objectFit, setObjectFit] = React.useState(_objectFit);
     const [transition, setTransition] = React.useState(_transition);
+    const [audioEnabled, setAudioEnabled] = React.useState(_audioEnabled);
     const videoRef = React.useRef<HTMLVideoElement>(null);
     const fadingRef = React.useRef(false);
 
@@ -90,6 +94,7 @@ function StartupMovieOverlay() {
         _setBlackScreen = setBlackScreen;
         _onObjectFitChange = setObjectFit;
         _onTransitionChange = setTransition;
+        _onAudioChange = setAudioEnabled;
 
         if (_pendingPlayUrl) {
             setVisible(true);
@@ -104,6 +109,7 @@ function StartupMovieOverlay() {
             _setBlackScreen = null;
             _onObjectFitChange = null;
             _onTransitionChange = null;
+            _onAudioChange = null;
         };
     }, []);
 
@@ -147,7 +153,7 @@ function StartupMovieOverlay() {
         ref={videoRef}
         src={videoUrl}
         autoPlay
-        muted
+        muted={!audioEnabled}
         playsInline
         style={{ width: "100%", height: "100%", objectFit, opacity: videoReady ? 1 : 0, transition: transition === "fade" ? "opacity 0.5s ease" : "none" }}
         onEnded={dismiss}
@@ -207,6 +213,7 @@ function Panel() {
     const [objectFit, setObjectFit] = React.useState(_objectFit);
     const [transition, setTransition] = React.useState(_transition);
     const [mode, setMode] = React.useState(_mode);
+    const [audioEnabled, setAudioEnabled] = React.useState(_audioEnabled);
     const [status, setStatus] = React.useState<any>(null);
 
     React.useEffect(() => {
@@ -240,6 +247,14 @@ function Panel() {
         setMode(val);
         _mode = val;
         localStorage.setItem(MODE_KEY, val);
+    };
+
+    const handleAudio = (v: { data: string }) => {
+        const val = v.data === "true";
+        setAudioEnabled(val);
+        _audioEnabled = val;
+        localStorage.setItem(AUDIO_KEY, String(val));
+        _onAudioChange?.(val);
     };
 
     const selectedMovie = movies.find((m: any) => m.name === selected);
@@ -338,6 +353,19 @@ function Panel() {
                     ]}
                     selectedOption={mode}
                     onChange={handleMode}
+                />
+            </PanelSectionRow>
+        </PanelSection>
+
+        <PanelSection title="Audio">
+            <PanelSectionRow>
+                <Dropdown
+                    rgOptions={[
+                        { label: "Off", data: "false" },
+                        { label: "On", data: "true" },
+                    ]}
+                    selectedOption={String(audioEnabled)}
+                    onChange={handleAudio}
                 />
             </PanelSectionRow>
         </PanelSection>
