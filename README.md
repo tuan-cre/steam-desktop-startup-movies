@@ -37,6 +37,7 @@ Open the plugin panel from Millennium's plugin settings:
 - **Video Fit** — how the video scales to fill the screen (contain, cover, or fill)
 - **Transition** — fade out or instant cut when dismissing the video
 - **Playback Mode** — static (always plays the selected movie) or shuffle (random pick each startup)
+- **Audio** — toggle sound on/off for startup movies (off by default)
 
 ## Requirements
 
