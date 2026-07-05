@@ -20,7 +20,8 @@ Steam only supports startup movies in Big Picture mode. This plugin brings that 
 - **Video fit modes** — Contain (letterbox), Cover (crop), or Fill (stretch)
 - **Thumbnail previews** — auto-generated preview images in the config panel (requires ffmpeg)
 - **Plugin-local videos** — movies are stored inside the plugin folder, not Steam's config directory
-- **Fade transition** — smooth fade-out when dismissed or video ends
+- **Configurable transition** — choose between smooth fade or instant cut
+- **Shuffle mode** — randomly pick a different movie each startup
 - **Resilient server** — auto-detects port conflicts and restarts if the HTTP server crashes
 - **Diagnostics** — status messages in the config panel when dependencies are missing
 
@@ -34,6 +35,8 @@ Open the plugin panel from Millennium's plugin settings:
 
 - **Movie** — select which video to play at startup (shows file size and thumbnail)
 - **Video Fit** — how the video scales to fill the screen (contain, cover, or fill)
+- **Transition** — fade out or instant cut when dismissing the video
+- **Playback Mode** — static (always plays the selected movie) or shuffle (random pick each startup)
 
 ## Requirements
 
