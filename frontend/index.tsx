@@ -22,23 +22,12 @@ let _overlayPlay: ((url: string) => void) | null = null;
 let _pendingPlayUrl: string | null = null;
 let _objectFit: "contain" | "cover" | "fill" = (localStorage.getItem(OBJECT_FIT_KEY) as any) || "contain";
 let _onObjectFitChange: ((v: "contain" | "cover" | "fill") => void) | null = null;
-let _firstLoad = !sessionStorage.getItem(PLAYED_KEY);
 let _setBlackScreen: ((v: boolean) => void) | null = null;
 let _transition: "fade" | "none" = (localStorage.getItem(TRANSITION_KEY) as any) || "fade";
 let _mode: "default" | "shuffle" = (localStorage.getItem(MODE_KEY) as any) || "default";
 let _onTransitionChange: ((v: "fade" | "none") => void) | null = null;
 let _audioEnabled: boolean = localStorage.getItem(AUDIO_KEY) === "true";
 let _onAudioChange: ((v: boolean) => void) | null = null;
-
-console.log("[startup-movies] config", {
-    audio: _audioEnabled,
-    transition: _transition,
-    mode: _mode,
-    objectFit: _objectFit,
-    selected: localStorage.getItem(MOVIE_KEY),
-    firstLoad: _firstLoad,
-    playedThisSession: sessionStorage.getItem(PLAYED_KEY),
-});
 
 async function callBackend(method: string) {
     try {
@@ -86,24 +75,23 @@ const overlayStyle: React.CSSProperties = {
 function StartupMovieOverlay() {
     const [videoUrl, setVideoUrl] = React.useState<string | null>(null);
     const [visible, setVisible] = React.useState(true);
-    const [blackScreen, setBlackScreen] = React.useState(_firstLoad);
+    const [blackScreen, setBlackScreen] = React.useState(true);
     const [videoReady, setVideoReady] = React.useState(false);
     const [objectFit, setObjectFit] = React.useState(_objectFit);
     const [transition, setTransition] = React.useState(_transition);
     const [audioEnabled, setAudioEnabled] = React.useState(_audioEnabled);
     const videoRef = React.useRef<HTMLVideoElement>(null);
     const fadingRef = React.useRef(false);
-    const logCountRef = React.useRef(0);
 
     React.useEffect(() => {
-        var prehide = document.getElementById('millennium-prehide');
-        if (prehide) { prehide.remove(); console.log("[startup-movies] removed millennium-prehide"); }
-
-        const c = ++logCountRef.current;
-        console.log("[startup-movies] overlay state", { c, videoUrl, visible, blackScreen, videoReady, audioEnabled, firstLoad: _firstLoad });
+        requestAnimationFrame(() => {
+            var bo = document.getElementById('millennium-black-overlay');
+            if (bo) bo.remove();
+            var prehide = document.getElementById('millennium-prehide');
+            if (prehide) prehide.remove();
+        });
 
         _overlayPlay = (url: string) => {
-            console.log("[startup-movies] play", url);
             setVisible(true);
             fadingRef.current = false;
             setVideoReady(false);
@@ -132,26 +120,7 @@ function StartupMovieOverlay() {
     }, []);
 
     const handleVideoReady = React.useCallback(() => {
-        console.log("[startup-movies] video ready", videoRef.current?.readyState);
         setVideoReady(true);
-    }, []);
-
-    const handleVideoPlay = React.useCallback(() => {
-        const v = videoRef.current;
-        console.log("[startup-movies] video onPlay", { muted: v?.muted, readyState: v?.readyState, paused: v?.paused });
-    }, []);
-
-    const handleVideoPause = React.useCallback(() => {
-        console.log("[startup-movies] video onPause");
-    }, []);
-
-    const handleVideoWaiting = React.useCallback(() => {
-        console.log("[startup-movies] video onWaiting");
-    }, []);
-
-    const handleVideoPlaying = React.useCallback(() => {
-        const v = videoRef.current;
-        console.log("[startup-movies] video onPlaying", { muted: v?.muted, readyState: v?.readyState, currentTime: v?.currentTime });
     }, []);
 
     const isFade = transition === "fade";
@@ -159,8 +128,6 @@ function StartupMovieOverlay() {
 
     const dismiss = React.useCallback(() => {
         if (fadingRef.current) return;
-        const v = videoRef.current;
-        console.log("[startup-movies] dismiss", { muted: v?.muted, readyState: v?.readyState, currentTime: v?.currentTime, duration: v?.duration });
         fadingRef.current = true;
         setVisible(false);
         setBlackScreen(false);
@@ -199,10 +166,6 @@ function StartupMovieOverlay() {
         onError={dismiss}
         onLoadedData={handleVideoReady}
         onCanPlay={handleVideoReady}
-        onPlay={handleVideoPlay}
-        onPause={handleVideoPause}
-        onWaiting={handleVideoWaiting}
-        onPlaying={handleVideoPlaying}
         />
         )}
         </div>
@@ -221,33 +184,28 @@ function playMovie(url: string) {
 }
 
 async function tryStartupPlayback() {
-    if (sessionStorage.getItem(PLAYED_KEY)) {
-        (window as any).__showSteamUI?.();
-        return;
-    }
-
     const movies = await loadMovies();
-    console.log("[startup-movies] movies loaded", movies.length);
     if (!movies.length) {
+        _setBlackScreen?.(false);
         (window as any).__showSteamUI?.();
         return;
     }
 
-    sessionStorage.setItem(PLAYED_KEY, "1");
+    if (!sessionStorage.getItem(PLAYED_KEY)) {
+        sessionStorage.setItem(PLAYED_KEY, "1");
+    }
 
     let movie: any;
     if (_mode === "shuffle") {
         movie = movies[Math.floor(Math.random() * movies.length)];
-        console.log("[startup-movies] shuffle picked", movie?.name);
     } else {
         const saved = localStorage.getItem(MOVIE_KEY);
         movie = saved ? movies.find((m: any) => m.name === saved) : movies[0];
-        console.log("[startup-movies] selected", movie?.name, "from saved", saved);
     }
     if (movie?.url) {
-        console.log("[startup-movies] starting playback");
         playMovie(movie.url);
     } else {
+        _setBlackScreen?.(false);
         (window as any).__showSteamUI?.();
     }
 }
