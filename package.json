@@ -12,7 +12,7 @@
     },
     "type": "module",
     "name": "startup-movies",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "main": "./frontend/index.tsx",
     "description": "Startup Movies plugin for desktop Steam"
 }
