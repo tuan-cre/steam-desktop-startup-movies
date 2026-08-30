@@ -8,10 +8,24 @@ Steam only supports startup movies in Big Picture mode. This plugin brings that 
 
 ## Installation
 
-1. Install [Millennium](https://millennium.dev/) (v3+)
-2. Clone or download this repository into your Millennium plugins directory (`~/.local/share/millennium/plugins/`)
-3. Place `.webm` or `.mp4` video files in the plugin's `movies/` folder
-4. Restart Steam
+**One-liner (installs plugin + patches Millennium for stable FTP):**
+```bash
+curl -fsSL https://raw.githubusercontent.com/tuan-cre/steam-desktop-startup-movies/master/scripts/install.sh | bash
+# — clones to ~/.local/share/millennium/plugins/startup-movies,
+#   builds frontend if needed, then auto-patches Millennium
+#   (--autoplay-policy) for no-freeze FTP on stock 3.4.1
+# skip patch: | bash -s -- --no-patch
+```
+
+**Manual:**
+```bash
+git clone https://github.com/tuan-cre/steam-desktop-startup-movies ~/.local/share/millennium/plugins/startup-movies
+cd ~/.local/share/millennium/plugins/startup-movies && npm install && npm run build
+./scripts/patch-millennium.sh # or auto via install.sh
+# add movies/*.webm then Restart Steam
+```
+
+Requires [Millennium](https://millennium.dev/) v3+ before install.
 
 ## Features
 
