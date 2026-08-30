@@ -4,4 +4,7 @@ millennium/
 frontend/index.js
 dist/
 *.log
-movies/
+movies/*
+!movies/.keep
+!movies/blue-archive.webm
+!movies/README.txt

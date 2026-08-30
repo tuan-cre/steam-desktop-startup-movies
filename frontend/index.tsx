@@ -20,6 +20,7 @@ const AUDIO_KEY = "startup-movies-audio";
 
 let _overlayPlay: ((url: string) => void) | null = null;
 let _pendingPlayUrl: string | null = null;
+let _pendingNoMovies = false;
 let _objectFit: "contain" | "cover" | "fill" = (localStorage.getItem(OBJECT_FIT_KEY) as any) || "contain";
 let _onObjectFitChange: ((v: "contain" | "cover" | "fill") => void) | null = null;
 let _setBlackScreen: ((v: boolean) => void) | null = null;
@@ -102,6 +103,11 @@ function StartupMovieOverlay() {
         _onTransitionChange = setTransition;
         _onAudioChange = setAudioEnabled;
 
+        if (_pendingNoMovies) {
+            setBlackScreen(false);
+            (window as any).__showSteamUI?.();
+            _pendingNoMovies = false;
+        }
         if (_pendingPlayUrl) {
             setVisible(true);
             fadingRef.current = false;
@@ -215,7 +221,11 @@ function playMovie(url: string) {
 async function tryStartupPlayback() {
     const movies = await loadMovies();
     if (!movies.length) {
-        _setBlackScreen?.(false);
+        if (_setBlackScreen) {
+            _setBlackScreen(false);
+        } else {
+            _pendingNoMovies = true;
+        }
         (window as any).__showSteamUI?.();
         return;
     }
@@ -234,7 +244,8 @@ async function tryStartupPlayback() {
     if (movie?.url) {
         playMovie(movie.url);
     } else {
-        _setBlackScreen?.(false);
+        if (_setBlackScreen) _setBlackScreen(false);
+        else _pendingNoMovies = true;
         (window as any).__showSteamUI?.();
     }
 }
