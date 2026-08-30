@@ -45,6 +45,26 @@ local function find_ffmpeg()
     return nil
 end
 
+local _has_autoplay_patch = nil
+local function has_autoplay_patch()
+    if _has_autoplay_patch ~= nil then return _has_autoplay_patch end
+    -- check steamwebhelper cmdline for --autoplay-policy flag (patched Millennium)
+    local h = io.popen("ps aux 2>/dev/null | grep -q 'autoplay-policy' && echo yes || echo no")
+    if h then
+        local r = h:read("*a") or ""
+        h:close()
+        _has_autoplay_patch = r:find("yes") ~= nil
+        if _has_autoplay_patch then
+            logger:info("Detected autoplay patch (steamwebhelper has --autoplay-policy)")
+        else
+            logger:info("No autoplay patch - using muted-first hybrid fallback")
+        end
+        return _has_autoplay_patch
+    end
+    _has_autoplay_patch = false
+    return false
+end
+
 local function ensure_movies_dir()
     if movies_path then
         return movies_path
@@ -242,7 +262,8 @@ function get_status()
         has_python = python_bin ~= nil,
         has_ffmpeg = ffmpeg_bin ~= nil,
         server_running = server_pid ~= nil,
-        movie_count = cached_count
+        movie_count = cached_count,
+        has_autoplay_patch = has_autoplay_patch()
     })
 end
 
