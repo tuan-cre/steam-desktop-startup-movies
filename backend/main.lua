@@ -18,7 +18,6 @@ local function ftp_url_from_path(abs_path)
     -- On Linux: FTP_BASE + encode(path without leading "/")
     local p = abs_path
     if p:sub(1,1) == "/" then p = p:sub(2) end
-    -- encode: keep alnum - _ . ~ / , encode others, space->+
     local function enc_char(c)
         local b = string.byte(c)
         if (b >= 48 and b <= 57) or (b >= 65 and b <= 90) or (b >= 97 and b <= 122)
@@ -30,8 +29,7 @@ local function ftp_url_from_path(abs_path)
             return string.format("%%%02X", b)
         end
     end
-    local enc = p:gsub("([^%w%-%_%.%~%/ ])", enc_char):gsub(" ", "+")
-    -- also encode space already handled, keep "/" unescaped
+    local enc = p:gsub("([^%w%-%_%.%~%/ ])", enc_char)
     return FTP_BASE .. "/" .. enc
 end
 
@@ -214,8 +212,6 @@ end
 function get_status()
     return json_encode({
         has_ffmpeg = ffmpeg_bin ~= nil,
-        has_python = true,
-        server_running = true,
         movie_count = cached_count,
         has_autoplay_patch = has_autoplay_patch(),
         ftp_serving = true
