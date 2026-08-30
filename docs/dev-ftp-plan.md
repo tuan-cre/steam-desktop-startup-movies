@@ -1,29 +1,29 @@
-# dev: ftp file serving (replace python http.server)
+# dev: ftp file serving (replace python http.server) — implemented
 
-Goal: drop `python3 -m http.server` `backend/main.lua:182` and serve `movies/` via Millennium's existing `https://millennium.ftp/<token>/` (`src/instrumentation/loopback/main.cc:313`, `src/engine/plugin_loader.cc:275` `get_ftp_url()`).
+Goal: drop `python3 -m http.server` `backend/main.lua:182` and serve `movies/` via Millennium's existing `https://millennium.ftp/<absolute_path>` (`src/engine/http_hooks.cc:138` `vfs_request_handler`).
 
 ## Why
 - No extra process/port race (`base_port 18080` +6 tries)
-- No `python3` dep, no `kill -0` polling, no `cached_movies` stale json
-- One ftp server already serves `frontend/index.js`
+- No `python3` dep, no `kill -0` polling
+- One ftp VFS already serves `frontend/index.js` via `https://millennium.ftp/<path>` (`src/include/millennium/url_parser.h:79`)
 
-## Plan (dev branch)
+## Implemented (dev branch 2026-08-30)
 1. **Backend** `backend/main.lua`:
-   - Remove `start_http_server`, `server_pid/url`, `find_python`, `ps autoplay` stays for compat.
-   - `ensure_movies_dir()` returns absolute `movies_path` (keep `thumbs/`).
-   - `get_movies()` returns `name/size` + `abs_path` (not `url`). Frontend resolves via `get_ftp_url` or new `get_movie_url(name)` that returns `https://millennium.ftp/<token>/startup-movies/movies/<file>` via `network_hook_ctl` hook.
-   - Add `millennium.add_browser_hook` equivalent via `network_hook_ctl::TagTypes` if needed, or expose `get_ftp_token` via new ` Millenium.ftp_url` IPC.
+   - Removed `find_python`, `server_pid/url`, `start_http_server` (~70 lines).
+   - Added `FTP_BASE = "https://millennium.ftp"` + `ftp_url_from_path()` mirroring `utils::url::encode_url` — `https://millennium.ftp/<encoded_abs_path>`.
+   - `get_movies()` now returns `url = ftp_url_from_path(abs_path)` for each `.webm/.mp4`, `thumb = ftp_url_from_path(thumb_path)`.
+   - `on_load()` no longer starts server, logs `served via https://millennium.ftp`, `on_unload()` no `kill`.
+   - `get_status()` returns `has_python=true, server_running=true, ftp_serving=true` for frontend compat.
 2. **Frontend** `frontend/index.tsx`:
-   - `loadMovies()` builds `url = await callBackend("get_movie_url", {name})` or `https://millennium.ftp/...`.
-   - Keep hybrid `muted` fallback `index.tsx:121`, `steam-hide.css:6` override.
-3. **Thumbs**: serve similarly via ftp, or `fs.read` + `data:image/jpeg;base64` from backend.
-4. **Config**: migrate `localStorage` `OBJECT_FIT/TRANSITION/MODE/AUDIO` to `plugin_config` (`CONFIG_GET/SET` `main.lua:961`) for cross-restart sync.
+   - No URL construction change needed (backend provides ftp URL).
+   - `Panel` suppresses python/server warnings when `ftp_serving`, appends `| FTP VFS serving (no python)` to `hybridInfo`.
+   - Keeps hybrid `muted` fallback `index.tsx:121`, `steam-hide.css:6` override.
+3. **Thumbs**: same ftp path, still `ffmpeg` background gen.
+4. **Tests**: `npm run build` prod `3.10s` ok, `frontend/index.js` contains `ftp_serving`.
 
-## Test
-- Stock Millennium: `muted` then unmute after `onLoadedData` still works.
-- Patched: instant audio.
-- No python installed: `get_status` no longer reports `has_python`.
+## Known caveat
+`http_hooks.cc:198` `Fetch.fulfillRequest` serves full file (no `Range`/`Accept-Ranges`). Startup movie plays from start fine; seeking during playback may not work. For large files, consider adding range support or `blob:` fallback.
 
 ## Branches
-- `master` = hybrid python server (stable)
-- `dev` = this ftp refactor (WIP)
+- `master` = hybrid python server (stable, `441d4b7`)
+- `dev` = ftp VFS (this branch, no python)
