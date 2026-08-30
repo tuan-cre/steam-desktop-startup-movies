@@ -297,10 +297,7 @@ function Panel() {
     const warnings: string[] = [];
     let hybridInfo: string | null = null;
     if (status) {
-        // dev/ftp: python/server no longer required (served via https://millennium.ftp VFS)
-        if (status.ftp_serving) {
-            // no python/server warnings in dev
-        } else {
+        if (!status.ftp_serving) {
             if (!status.has_python) warnings.push("python3 not found - HTTP server unavailable");
             if (status.has_python && !status.server_running) warnings.push("HTTP server is not running");
         }
@@ -310,7 +307,7 @@ function Panel() {
         } else if (status.has_autoplay_patch === true && audioEnabled) {
             hybridInfo = "Patched Millennium detected - native unmuted autoplay enabled";
         }
-        if (status.ftp_serving) {
+        if (status.ftp_serving && movies.length > 0) {
             hybridInfo = (hybridInfo ? hybridInfo + " | " : "") + "FTP VFS serving (no python)";
         }
     }
