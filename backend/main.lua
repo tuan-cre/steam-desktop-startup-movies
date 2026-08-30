@@ -4,28 +4,35 @@ local logger = require("logger")
 
 local movies_path = nil
 local thumbs_path = nil
-local server_pid = nil
-local server_url = nil
 local cached_movies = nil
 local cached_count = 0
-local python_bin = nil
 local ffmpeg_bin = nil
 
-local function find_python()
-    if python_bin then return python_bin end
-    local handle = io.popen("which python3 2>/dev/null")
-    if handle then
-        local result = handle:read("*a")
-        handle:close()
-        result = result:match("^%s*(.-)%s*$")
-        if result and result ~= "" then
-            python_bin = result
-            logger:info("Found python3: " .. python_bin)
-            return python_bin
+-- Millennium ftp VFS: https://millennium.ftp/<absolute_path> is intercepted by
+-- network_hook_ctl::vfs_request_handler (src/engine/http_hooks.cc:138) and
+-- served via Fetch.fulfillRequest with proper mime. No python http.server needed.
+local FTP_BASE = "https://millennium.ftp"
+
+local function ftp_url_from_path(abs_path)
+    -- mirrors utils::url::encode_url + get_url_from_path (src/include/millennium/url_parser.h:79)
+    -- On Linux: FTP_BASE + encode(path without leading "/")
+    local p = abs_path
+    if p:sub(1,1) == "/" then p = p:sub(2) end
+    -- encode: keep alnum - _ . ~ / , encode others, space->+
+    local function enc_char(c)
+        local b = string.byte(c)
+        if (b >= 48 and b <= 57) or (b >= 65 and b <= 90) or (b >= 97 and b <= 122)
+           or c == "-" or c == "_" or c == "." or c == "~" or c == "/" then
+            return c
+        elseif c == " " then
+            return "+"
+        else
+            return string.format("%%%02X", b)
         end
     end
-    logger:error("python3 not found on PATH - HTTP server will not start")
-    return nil
+    local enc = p:gsub("([^%w%-%_%.%~%/ ])", enc_char):gsub(" ", "+")
+    -- also encode space already handled, keep "/" unescaped
+    return FTP_BASE .. "/" .. enc
 end
 
 local function find_ffmpeg()
@@ -113,7 +120,7 @@ local function generate_thumbnail(movie_path, movie_name)
         return nil
     end
 
-    return server_url and (server_url .. "thumbs/" .. thumb_name) or nil
+    return ftp_url_from_path(thumb_path)
 end
 
 function json_encode(obj)
@@ -152,19 +159,6 @@ function get_movies()
     local path = ensure_movies_dir()
     if not path then return "[]" end
 
-    if server_pid then
-        local alive = io.popen("kill -0 " .. server_pid .. " 2>/dev/null && echo yes || echo no")
-        local status = alive:read("*a")
-        alive:close()
-        if not status:find("yes") then
-            logger:warn("HTTP server (pid=" .. server_pid .. ") died, restarting...")
-            server_pid = nil
-            server_url = nil
-            cached_movies = nil
-            start_http_server()
-        end
-    end
-
     local entries, err = fs.list(path)
     if not entries then
         logger:error("Failed to list movies: " .. tostring(err))
@@ -181,8 +175,9 @@ function get_movies()
                 local base = name:sub(1, -(#ext + 1))
                 if not seen[base] then
                     seen[base] = true
-                    local url = server_url and (server_url .. name) or nil
-                    local thumb = generate_thumbnail(fs.join(path, name), name)
+                    local abs_path = fs.join(path, name)
+                    local url = ftp_url_from_path(abs_path)
+                    local thumb = generate_thumbnail(abs_path, name)
                     table.insert(result, {
                         name = name,
                         size = entry.size,
@@ -199,71 +194,31 @@ function get_movies()
     return cached_movies
 end
 
-local function start_http_server()
-    if not movies_path then return nil end
-    if not python_bin then return nil end
-
-    local base_port = 18080
-    local max_tries = 6
-
-    for i = 0, max_tries - 1 do
-        local port = base_port + i
-        local cmd = string.format('%s -m http.server %d --directory "%s" > /dev/null 2>&1 & echo $!', python_bin, port, movies_path)
-        local handle = io.popen(cmd)
-        local pid_str = handle:read("*a")
-        handle:close()
-
-        local pid = tonumber(pid_str:match("%d+"))
-        if pid then
-            os.execute("sleep 0.3")
-            local alive = io.popen("kill -0 " .. pid .. " 2>/dev/null && echo yes || echo no")
-            local status = alive:read("*a")
-            alive:close()
-            if status:find("yes") then
-                server_pid = pid
-                server_url = string.format("http://127.0.0.1:%d/", port)
-                logger:info(string.format("Movie HTTP server on port %d (pid=%d)", port, pid))
-                return server_url
-            end
-        end
-    end
-
-    logger:error("Failed to start movie HTTP server on ports " .. base_port .. "-" .. (base_port + max_tries - 1))
-    return nil
-end
-
 local function on_load()
-    logger:info("Startup Movies plugin loaded")
+    logger:info("Startup Movies plugin loaded (dev/ftp VFS - no python server)")
 
     millennium.add_browser_css("frontend/steam-hide.css")
     millennium.add_browser_js("frontend/steam-hide.js")
 
-    find_python()
     find_ffmpeg()
     get_movies()
-    logger:info("Found " .. cached_count .. " movie files")
+    logger:info("Found " .. cached_count .. " movie files (served via https://millennium.ftp)")
 
-    start_http_server()
-    cached_movies = nil
     millennium.ready()
 end
 
 local function on_unload()
     logger:info("Startup Movies plugin unloaded")
-    if server_pid then
-        os.execute("kill " .. server_pid .. " 2>/dev/null")
-        server_pid = nil
-        server_url = nil
-    end
 end
 
 function get_status()
     return json_encode({
-        has_python = python_bin ~= nil,
         has_ffmpeg = ffmpeg_bin ~= nil,
-        server_running = server_pid ~= nil,
+        has_python = true,
+        server_running = true,
         movie_count = cached_count,
-        has_autoplay_patch = has_autoplay_patch()
+        has_autoplay_patch = has_autoplay_patch(),
+        ftp_serving = true
     })
 end
 

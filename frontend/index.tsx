@@ -297,13 +297,21 @@ function Panel() {
     const warnings: string[] = [];
     let hybridInfo: string | null = null;
     if (status) {
-        if (!status.has_python) warnings.push("python3 not found - HTTP server unavailable");
+        // dev/ftp: python/server no longer required (served via https://millennium.ftp VFS)
+        if (status.ftp_serving) {
+            // no python/server warnings in dev
+        } else {
+            if (!status.has_python) warnings.push("python3 not found - HTTP server unavailable");
+            if (status.has_python && !status.server_running) warnings.push("HTTP server is not running");
+        }
         if (!status.has_ffmpeg) warnings.push("ffmpeg not found - thumbnails disabled");
-        if (status.has_python && !status.server_running) warnings.push("HTTP server is not running");
         if (status.has_autoplay_patch === false && audioEnabled) {
             hybridInfo = "Stock Millennium detected - audio uses muted-first fallback (no freeze)";
         } else if (status.has_autoplay_patch === true && audioEnabled) {
             hybridInfo = "Patched Millennium detected - native unmuted autoplay enabled";
+        }
+        if (status.ftp_serving) {
+            hybridInfo = (hybridInfo ? hybridInfo + " | " : "") + "FTP VFS serving (no python)";
         }
     }
 
