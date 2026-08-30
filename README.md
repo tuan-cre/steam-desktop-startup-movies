@@ -47,11 +47,34 @@ Open the plugin panel from Millennium's plugin settings:
 
 If either dependency is missing, the plugin will show a status message in the config panel explaining what's unavailable.
 
+## Audio & Millennium Compatibility
+
+The plugin uses a **hybrid** strategy so it works on both stock and patched Millennium without freezing:
+
+- **Stock Millennium** — video starts `muted` (allowed by CEF) then unmutes ~100ms after decode via `play().catch()` fallback. No freeze, slight delay before sound.
+- **Patched Millennium** (`--autoplay-policy=no-user-gesture-required` in `src/instrumentation/internal/steam_hooks.cc:225`) — native unmuted `autoplay`, instant sound. The config panel shows `Compatibility: Patched Millennium detected` vs `Stock ... muted-first fallback`.
+
+Only `1` line in Millennium is needed for instant audio; the prehide/black-overlay patches are now handled inside the plugin (`frontend/steam-hide.css:6`).
+
+### Dev-only: patch Millennium for instant audio
+
+End-users don't need this — hybrid already works. For devs who want the patch without keeping a permanent clone:
+
+```bash
+./scripts/patch-millennium.sh
+# temp clones https://github.com/SteamClientHomebrew/Millennium to /tmp,
+# inserts the autoplay flag, builds Release -m32, and sudo links to /usr/lib/millennium/
+# Restart Steam after
+```
+
+Requires `cmake`, `ninja`, `gcc -m32` (`gcc-multilib` / `lib32`). If you already have `~/Projects/Millennium` cloned, just `grep -q autoplay-policy src/instrumentation/internal/steam_hooks.cc ||` apply the one-liner and `cmake --build build`.
+
 ## Troubleshooting
 
 - **No movies appear** — Make sure `.webm` or `.mp4` files are in the `movies/` folder inside the plugin directory
 - **Video doesn't play** — Check that Python 3 is installed and available on your PATH
 - **Thumbnails missing** — Install ffmpeg for automatic thumbnail generation
+- **No sound / delayed sound** — Stock Millennium delays unmute until after playback starts (hybrid fallback). Run `scripts/patch-millennium.sh` for instant audio, or leave as-is
 
 ## License
 

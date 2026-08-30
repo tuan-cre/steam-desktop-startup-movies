@@ -121,7 +121,35 @@ function StartupMovieOverlay() {
 
     const handleVideoReady = React.useCallback(() => {
         setVideoReady(true);
+        // Hybrid: try unmuting after decode if patch allows it. Starts muted for stock compatibility.
+        if (_audioEnabled && videoRef.current) {
+            try {
+                videoRef.current.muted = false;
+                const p = videoRef.current.play();
+                if (p && (p as any).catch) (p as Promise<void>).catch(() => {
+                    if (videoRef.current) videoRef.current.muted = true;
+                });
+            } catch {}
+        }
     }, []);
+
+    // Hybrid: handle audio toggle while video is playing
+    React.useEffect(() => {
+        if (!videoRef.current || !videoUrl) return;
+        if (!audioEnabled) {
+            videoRef.current.muted = true;
+        } else if (videoReady) {
+            try {
+                videoRef.current.muted = false;
+                const p = videoRef.current.play();
+                if (p && (p as any).catch) (p as Promise<void>).catch(() => {
+                    if (videoRef.current) videoRef.current.muted = true;
+                });
+            } catch {
+                if (videoRef.current) videoRef.current.muted = true;
+            }
+        }
+    }, [audioEnabled, videoReady, videoUrl]);
 
     const isFade = transition === "fade";
     const dismissTimeout = isFade ? 400 : 0;
@@ -147,6 +175,7 @@ function StartupMovieOverlay() {
     return (
         <div
         id={OVERLAY_ID}
+        onClick={dismiss}
         style={{
             ...overlayStyle,
             opacity: ((videoUrl && visible) || (blackScreen && visible)) ? 1 : 0,
@@ -159,7 +188,7 @@ function StartupMovieOverlay() {
         ref={videoRef}
         src={videoUrl}
         autoPlay
-        muted={!audioEnabled}
+        muted
         playsInline
         style={{ width: "100%", height: "100%", objectFit, opacity: videoReady ? 1 : 0, transition: transition === "fade" ? "opacity 0.5s ease" : "none" }}
         onEnded={dismiss}
@@ -266,10 +295,16 @@ function Panel() {
     const thumbUrl = selectedMovie?.thumb || null;
 
     const warnings: string[] = [];
+    let hybridInfo: string | null = null;
     if (status) {
         if (!status.has_python) warnings.push("python3 not found - HTTP server unavailable");
         if (!status.has_ffmpeg) warnings.push("ffmpeg not found - thumbnails disabled");
         if (status.has_python && !status.server_running) warnings.push("HTTP server is not running");
+        if (status.has_autoplay_patch === false && audioEnabled) {
+            hybridInfo = "Stock Millennium detected - audio uses muted-first fallback (no freeze)";
+        } else if (status.has_autoplay_patch === true && audioEnabled) {
+            hybridInfo = "Patched Millennium detected - native unmuted autoplay enabled";
+        }
     }
 
     return (
@@ -280,6 +315,13 @@ function Panel() {
                     <div style={{ color: "#ff6b6b", fontSize: "12px", lineHeight: "1.5" }}>
                         {warnings.map((w, i) => <div key={i}>{w}</div>)}
                     </div>
+                </PanelSectionRow>
+            </PanelSection>
+        )}
+        {hybridInfo && (
+            <PanelSection title="Compatibility">
+                <PanelSectionRow>
+                    <div style={{ color: "#7eb0ff", fontSize: "12px", lineHeight: "1.5" }}>{hybridInfo}</div>
                 </PanelSectionRow>
             </PanelSection>
         )}
