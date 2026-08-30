@@ -22,7 +22,7 @@ Steam only supports startup movies in Big Picture mode. This plugin brings that 
 - **Plugin-local videos** — movies are stored inside the plugin folder, not Steam's config directory
 - **Configurable transition** — choose between smooth fade or instant cut
 - **Shuffle mode** — randomly pick a different movie each startup
-- **Resilient server** — auto-detects port conflicts and restarts if the HTTP server crashes
+- **Zero-dependency serving** — movies served via Millennium's FTP VFS (`https://millennium.ftp`), no Python or extra HTTP server
 - **Diagnostics** — status messages in the config panel when dependencies are missing
 
 ## Adding Movies
@@ -42,10 +42,9 @@ Open the plugin panel from Millennium's plugin settings:
 ## Requirements
 
 - [Millennium](https://millennium.dev/) v3+
-- Python 3 (for the local HTTP server that serves video files)
 - ffmpeg (optional, for thumbnail generation)
 
-If either dependency is missing, the plugin will show a status message in the config panel explaining what's unavailable.
+No Python required — movies are served via Millennium's built-in FTP VFS. If ffmpeg is missing, the plugin will show a status message and thumbnails will be disabled.
 
 ## Audio & Millennium Compatibility
 
@@ -72,7 +71,7 @@ Requires `cmake`, `ninja`, `gcc -m32` (`gcc-multilib` / `lib32`). If you already
 ## Troubleshooting
 
 - **No movies appear** — Make sure `.webm` or `.mp4` files are in the `movies/` folder inside the plugin directory
-- **Video doesn't play** — Check that Python 3 is installed and available on your PATH
+- **Video doesn't play** — Check Millennium logs (`~/.local/share/Steam/logs/`) for `Startup Movies plugin loaded (dev/ftp VFS`); ensure movies are `.webm`/`.mp4`
 - **Thumbnails missing** — Install ffmpeg for automatic thumbnail generation
 - **No sound / delayed sound** — Stock Millennium delays unmute until after playback starts (hybrid fallback). Run `scripts/patch-millennium.sh` for instant audio, or leave as-is
 
