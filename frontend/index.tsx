@@ -30,9 +30,9 @@ let _onTransitionChange: ((v: "fade" | "none") => void) | null = null;
 let _audioEnabled: boolean = localStorage.getItem(AUDIO_KEY) === "true";
 let _onAudioChange: ((v: boolean) => void) | null = null;
 
-async function callBackend(method: string) {
+async function callBackend(method: string, args: any = {}) {
     try {
-        let result = await Millennium.callServerMethod(method, {});
+        let result = await Millennium.callServerMethod(method, args);
         if (typeof result === "string") {
             try { result = JSON.parse(result); } catch {}
         }
@@ -41,6 +41,17 @@ async function callBackend(method: string) {
         return null;
     }
 }
+
+async function logToBackend(msg: string) {
+    try { await Millennium.callServerMethod("log_message", { message: msg }); } catch {}
+}
+
+const videoErrorToString = (v?: HTMLVideoElement) => {
+    if (!v) return "no-video";
+    let e = "";
+    if (v.error) e += " code=" + v.error.code + " msg=" + (v.error.message || "");
+    return "net=" + v.networkState + " ready=" + v.readyState + " paused=" + v.paused + " dur=" + (Number.isFinite(v.duration) ? v.duration.toFixed(2) : "NaN") + " w=" + v.videoWidth + "x" + v.videoHeight + e;
+};
 
 let _cachedMovies: any[] | null = null;
 
@@ -127,7 +138,6 @@ function StartupMovieOverlay() {
 
     const handleVideoReady = React.useCallback(() => {
         setVideoReady(true);
-        // Hybrid: try unmuting after decode if patch allows it. Starts muted for stock compatibility.
         if (_audioEnabled && videoRef.current) {
             try {
                 videoRef.current.muted = false;
@@ -178,6 +188,27 @@ function StartupMovieOverlay() {
         }, dismissTimeout);
     }, [dismissTimeout]);
 
+    const dbgLog = React.useCallback((what: string) => {
+        logToBackend("DBG " + what + " url=" + (videoUrl || "none") + " " + videoErrorToString(videoRef.current || undefined));
+    }, [videoUrl]);
+
+    const handleVideoError = React.useCallback(() => {
+        const v = videoRef.current;
+        logToBackend("DBG video ERROR code=" + (v?.error?.code ?? "none") + " msg=" + (v?.error?.message || "none") + " " + videoErrorToString(v || undefined));
+        dismiss();
+    }, [dismiss]);
+
+    React.useEffect(() => {
+        if (!videoUrl) return;
+        logToBackend("DBG playback-begin " + videoUrl);
+        const t = window.setInterval(() => {
+            const v = videoRef.current;
+            if (!v) return;
+            logToBackend("DBG state " + videoErrorToString(v));
+        }, 3000);
+        return () => window.clearInterval(t);
+    }, [videoUrl]);
+
     return (
         <div
         id={OVERLAY_ID}
@@ -191,16 +222,17 @@ function StartupMovieOverlay() {
         >
         {videoUrl && (
         <video
-        ref={videoRef}
+        ref={(el) => { videoRef.current = el; if (el) logToBackend("DBG video mount src=" + videoUrl + " " + videoErrorToString(el)); }}
         src={videoUrl}
         autoPlay
         muted
         playsInline
         style={{ width: "100%", height: "100%", objectFit, opacity: videoReady ? 1 : 0, transition: transition === "fade" ? "opacity 0.5s ease" : "none" }}
         onEnded={dismiss}
-        onError={dismiss}
-        onLoadedData={handleVideoReady}
-        onCanPlay={handleVideoReady}
+        onError={handleVideoError}
+        onLoadedData={(e) => { dbgLog("loadeddata"); handleVideoReady(); }}
+        onCanPlay={(e) => { dbgLog("canplay"); handleVideoReady(); }}
+        onPlaying={(e) => { dbgLog("playing"); }}
         />
         )}
         </div>
@@ -256,6 +288,7 @@ async function tryStartupPlayback() {
         movie = saved ? movies.find((m: any) => m.name === saved) : movies[0];
     }
     if (movie?.url) {
+        logToBackend("DBG chosen-movie name=" + (movie.name || "?") + " url=" + movie.url);
         playMovie(movie.url);
     } else {
         if (_setBlackScreen) _setBlackScreen(false);

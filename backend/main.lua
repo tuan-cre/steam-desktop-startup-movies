@@ -358,8 +358,14 @@ function get_status()
     })
 end
 
-function log_message(message)
-    logger:info(message)
+function log_message(...)
+    local args = {...}
+    local msg = nil
+    for _, a in ipairs(args) do
+        if type(a) == "string" then msg = a
+        elseif type(a) == "table" and a.message then msg = a.message end
+    end
+    logger:info("[frontend] " .. tostring(msg or "no message"))
 end
 
 return {
