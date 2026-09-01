@@ -64,6 +64,136 @@ local function find_ffmpeg()
     return nil
 end
 
+-- ---------------------------------------------------------------------------
+-- Movie HTTP server (python http.server)
+-- Serves real binary + byte ranges, works cross-platform. Replaces the
+-- https://millennium.ftp VFS for movie serving: on Windows, Millennium's
+-- vfs_request_handler reads non-binary MIME types (webm/mp4 are UNKNOWN) via a
+-- text-mode std::ifstream, which truncates at the first 0x1A (Ctrl-Z) byte --
+-- every WebM starts with 0x1A (EBML magic) so it serves an empty body -> the
+-- <video> element gets MEDIA_ERR_SRC_NOT_SUPPORTED (code=4) -> black screen.
+-- ---------------------------------------------------------------------------
+local python_bin = nil
+local server_pid = nil
+local server_url = nil
+local server_port = nil
+
+local function find_python()
+    if python_bin then return python_bin end
+    local candidates = {}
+    if IS_WINDOWS then
+        candidates = {
+            { "where python",  { file = "python.exe" } },
+            { "where python3", { file = "python3.exe" } },
+            { "where py",      { file = "py.exe", args = { "-3" } } }
+        }
+    else
+        candidates = { { "which python3 2>/dev/null", {} }, { "which python 2>/dev/null", {} } }
+    end
+    for _, cand in ipairs(candidates) do
+        local handle = io.popen(cand[1])
+        if handle then
+            local result = (handle:read("*a") or ""):match("^[^\r\n]+") or ""
+            handle:close()
+            result = result:gsub("[ \t\r\n]+$", "")
+            if result ~= "" and not result:find("INFO: Could not find", 1, true) then
+                python_bin = { cmd = result, launch = cand[2] or {} }
+                logger:info("Found python: " .. result)
+                return python_bin
+            end
+        end
+    end
+    logger:warn("python not found on PATH - movie HTTP server will not start")
+    return nil
+end
+
+local function server_alive(pid)
+    if IS_WINDOWS then
+        if not pid then return false end
+        local h = io.popen('tasklist /FI "PID eq ' .. pid .. '" 2>NUL')
+        local r = h and (h:read("*a") or "") or ""
+        if h then h:close() end
+        return r:find("PID", 1, true) ~= nil
+    else
+        if not pid then return false end
+        local h = io.popen("kill -0 " .. pid .. " 2>/dev/null && echo yes || echo no")
+        local r = h and (h:read("*a") or "") or ""
+        if h then h:close() end
+        return r:find("yes") ~= nil
+    end
+end
+
+local function stop_http_server()
+    if server_pid then
+        if IS_WINDOWS then
+            os.execute('powershell -NoProfile -Command "Stop-Process -Id ' .. server_pid .. ' -Force -ErrorAction SilentlyContinue"')
+        else
+            os.execute("kill " .. server_pid .. " 2>/dev/null")
+        end
+        logger:info("Stopped movie HTTP server (pid=" .. server_pid .. ")")
+    end
+    server_pid = nil
+    server_url = nil
+    server_port = nil
+end
+
+local function start_http_server()
+    if not movies_path then return nil end
+    if not find_python() then return nil end
+    if server_url then return server_url end
+
+    local base_port = 18080
+    local max_tries = 6
+
+    for i = 0, max_tries - 1 do
+        local port = base_port + i
+        local pid = nil
+        if IS_WINDOWS then
+            local exe = python_bin.cmd
+            local arglist = { "-m", "http.server", tostring(port), "--directory", movies_path, "--bind", "127.0.0.1" }
+            if python_bin.launch and python_bin.launch.args then
+                for _, a in ipairs(python_bin.launch.args) do table.insert(arglist, 1, a) end
+            end
+            local args_ps = {}
+            for _, a in ipairs(arglist) do args_ps[#args_ps + 1] = "'" .. tostring(a):gsub("'", "''") .. "'" end
+            local ps = string.format(
+                "$p = Start-Process -FilePath '%s' -ArgumentList %s -WindowStyle Hidden -PassThru; Write-Output $p.Id",
+                exe, table.concat(args_ps, ",")
+            )
+            local h = io.popen('powershell -NoProfile -Command "' .. ps:gsub('"', '\\"') .. '"')
+            if h then
+                pid = tonumber((h:read("*a") or ""):match("%d+"))
+                h:close()
+            end
+        else
+            local cmd = string.format(
+                '"%s" -m http.server %d --directory "%s" --bind 127.0.0.1 > /dev/null 2>&1 & echo $!',
+                python_bin.cmd, port, movies_path
+            )
+            local h = io.popen(cmd)
+            if h then
+                pid = tonumber((h:read("*a") or ""):match("%d+"))
+                h:close()
+            end
+        end
+
+        if pid then
+            os.execute(IS_WINDOWS and "ping -n 2 127.0.0.1 > NUL" or "sleep 0.3")
+            if server_alive(pid) then
+                server_pid = pid
+                server_port = port
+                server_url = string.format("http://127.0.0.1:%d", port)
+                logger:info(string.format("Movie HTTP server on port %d (pid=%d)", port, pid))
+                return server_url
+            end
+            stop_http_server()
+        end
+    end
+
+    logger:error("Failed to start movie HTTP server on ports " .. base_port .. "-" .. (base_port + max_tries - 1))
+    return nil
+end
+
 local _has_autoplay_patch = nil
 local function has_autoplay_patch()
     if _has_autoplay_patch ~= nil then return _has_autoplay_patch end
@@ -253,6 +383,10 @@ local function generate_thumbnail(movie_path, movie_name)
         return nil
     end
 
+    if server_url then
+        local rel = (thumb_path:gsub("\\", "/")):match("([^/]+)$")
+        return server_url .. "/thumbs/" .. rel
+    end
     return ftp_url_from_path(thumb_path)
 end
 
@@ -309,7 +443,12 @@ function get_movies()
                 if not seen[base] then
                     seen[base] = true
                     local abs_path = fs.join(path, name)
-                    local url = ftp_url_from_path(abs_path)
+                    local url
+                    if server_url then
+                        url = server_url .. "/" .. name:gsub(" ", "%20")
+                    else
+                        url = ftp_url_from_path(abs_path)
+                    end
                     local thumb = generate_thumbnail(abs_path, name)
                     table.insert(result, {
                         name = name,
@@ -328,20 +467,22 @@ function get_movies()
 end
 
 local function on_load()
-    logger:info("Startup Movies plugin loaded (dev/ftp VFS - no python server)")
+    logger:info("Startup Movies plugin loaded (python http.server)")
 
     millennium.add_browser_css("frontend/steam-hide.css")
     millennium.add_browser_js("frontend/steam-hide.js")
 
     find_ffmpeg()
+    start_http_server()
     get_movies()
-    logger:info("Found " .. cached_count .. " movie files (served via https://millennium.ftp)")
+    logger:info("Found " .. cached_count .. " movie files (served via " .. tostring(server_url or "none") .. ")")
 
     millennium.ready()
 end
 
 local function on_unload()
     logger:info("Startup Movies plugin unloaded")
+    stop_http_server()
 end
 
 function get_status()
@@ -350,7 +491,10 @@ function get_status()
         has_ffmpeg = ffmpeg_bin ~= nil,
         movie_count = cached_count,
         has_autoplay_patch = has_autoplay_patch(),
-        ftp_serving = true,
+        ftp_serving = false,
+        http_serving = server_url ~= nil,
+        has_python = python_bin ~= nil,
+        server_running = server_url ~= nil,
         startup_found = startup.found,
         startup_raw = startup.raw,
         startup_is_library = startup.is_library,

@@ -21,10 +21,12 @@ irm https://raw.githubusercontent.com/tuan-cre/steam-desktop-startup-movies/wind
 ```
 Then add `.webm`/`.mp4` to `C:\Program Files (x86)\Steam\millennium\plugins\startup-movies\movies\` and restart Steam.
 
-> **Windows note:** the plugin runs on stock Millennium using the muted-first hybrid
-> audio fallback (works out of the box). The optional Linux-only Millennium patch that
-> enables *instant* unmuted audio does not yet exist for Windows. The plugin ships with a
-> prebuilt frontend, so **no Node.js/npm is required**.
+> **Windows note:** the plugin serves movies through a small local Python HTTP server
+> (not Millennium's FTP VFS, which can't serve video on Windows), so it needs **Python 3**
+> installed and on PATH (`python`/`python3`). On stock Millennium it runs using the
+> muted-first hybrid audio fallback (works out of the box). The optional Linux-only
+> Millennium patch that enables *instant* unmuted audio does not yet exist for Windows.
+> The plugin ships with a prebuilt frontend, so **no Node.js/npm is required**.
 
 **Manual:**
 ```bash
@@ -58,10 +60,9 @@ Drop `.webm` or `.mp4` files into the plugin's `movies/` folder and restart Stea
 ## Requirements
 
 - Millennium v3+
+- **Python 3** (required — serves movies via a local HTTP server)
 - ffmpeg (optional, for thumbnails)
 - Steam → Settings → Interface → **Startup Location** must be set to **Library** (required for the movie to cover the UI on launch)
-
-No Python needed — movies via `https://millennium.ftp` VFS.
 
 ## Audio
 
@@ -80,7 +81,8 @@ The one-liner patches automatically; manual: `./scripts/patch-millennium.sh` (ne
 - **No movies** — check `movies/` folder
 - **Movie not showing / UI visible behind movie** — ensure Steam → Settings → Interface → Startup Location is set to **Library**, then restart Steam
 - **No thumbnail** — install ffmpeg
-- **Freeze every-other** — stock FTP needs patch; re-run installer without `--no-patch`
+- **Freeze every-other** — stock patch needed; re-run installer without `--no-patch`
+- **Black screen / no movie** — ensure Python 3 is on PATH (movie HTTP server must start); check the log for `Movie HTTP server on port`
 - **No sound** — enable Audio; patch for instant audio
 
 ## License
