@@ -230,6 +230,20 @@ async function tryStartupPlayback() {
         return;
     }
 
+    // Require Library as Startup Location — Store renders as a centered popup
+    // that bleeds through the overlay (top/bottom of movie visible, Store in middle).
+    try {
+        const status = await callBackend("get_status");
+        if (status && status.startup_is_library === false) {
+            // Skip movie to avoid broken display; expose Steam UI immediately
+            if (_setBlackScreen) _setBlackScreen(false);
+            else _pendingNoMovies = true;
+            (window as any).__showSteamUI?.();
+            console.warn("[StartupMovies] Startup Location is '" + status.startup_raw + "' (not Library) — skipping movie to avoid Store overlay. Set Steam > Settings > Interface > Startup Location > Library");
+            return;
+        }
+    } catch {}
+
     if (!sessionStorage.getItem(PLAYED_KEY)) {
         sessionStorage.setItem(PLAYED_KEY, "1");
     }
@@ -307,6 +321,7 @@ function Panel() {
 
     const warnings: string[] = [];
     let hybridInfo: string | null = null;
+    let startupRequirement: { text: string; color: string } | null = null;
     if (status) {
         if (!status.ftp_serving) {
             if (!status.has_python) warnings.push("python3 not found - HTTP server unavailable");
@@ -321,6 +336,26 @@ function Panel() {
         if (status.ftp_serving && movies.length > 0) {
             hybridInfo = (hybridInfo ? hybridInfo + " | " : "") + "FTP VFS serving (no python)";
         }
+        // Library requirement: Store as startup renders centered and shows through movie
+        if (status.startup_is_library === false) {
+            startupRequirement = {
+                text: `Startup Location is "${status.startup_raw}" — Store will appear centered over the movie (only top/bottom visible). Fix: Steam → Settings → Interface → Startup Location → Library, then restart.`,
+                color: "#ff6b6b",
+            };
+            warnings.push(`Startup Location is "${status.startup_raw}" — must be Library (Steam → Settings → Interface)`);
+        } else if (status.startup_is_library === true) {
+            startupRequirement = { text: "Startup Location: Library ✓ — movie will cover fullscreen", color: "#59BF40" };
+        } else {
+            startupRequirement = {
+                text: "Requires Steam → Settings → Interface → Startup Location → Library (could not auto-detect — please verify manually)",
+                color: "#7eb0ff",
+            };
+        }
+    } else {
+        startupRequirement = {
+            text: "Requires Steam → Settings → Interface → Startup Location → Library (required so Store doesn't appear centered over the movie)",
+            color: "#7eb0ff",
+        };
     }
 
     return (
@@ -338,6 +373,13 @@ function Panel() {
             <PanelSection title="Compatibility">
                 <PanelSectionRow>
                     <div style={{ color: "#7eb0ff", fontSize: "12px", lineHeight: "1.5" }}>{hybridInfo}</div>
+                </PanelSectionRow>
+            </PanelSection>
+        )}
+        {startupRequirement && (
+            <PanelSection title="Requirement">
+                <PanelSectionRow>
+                    <div style={{ color: startupRequirement.color, fontSize: "12px", lineHeight: "1.5" }}>{startupRequirement.text}</div>
                 </PanelSectionRow>
             </PanelSection>
         )}
