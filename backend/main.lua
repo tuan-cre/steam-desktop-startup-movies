@@ -70,6 +70,88 @@ local function has_autoplay_patch()
     return false
 end
 
+local _startup_cache = nil
+local function get_startup_location_info()
+    if _startup_cache ~= nil then return _startup_cache end
+
+    local candidate_paths = {}
+    local home = os.getenv("HOME") or os.getenv("USERPROFILE") or ""
+    if home ~= "" then
+        candidate_paths[#candidate_paths+1] = home .. "/.steam/steam/config/config.vdf"
+        candidate_paths[#candidate_paths+1] = home .. "/.local/share/Steam/config/config.vdf"
+        candidate_paths[#candidate_paths+1] = home .. "/.steam/config/config.vdf"
+        candidate_paths[#candidate_paths+1] = home .. "/.steam/root/config/config.vdf"
+        candidate_paths[#candidate_paths+1] = home .. "/.var/app/com.valvesoftware.Steam/config/config.vdf"
+        -- flatpak / snap variants
+        candidate_paths[#candidate_paths+1] = home .. "/snap/steam/common/.steam/steam/config/config.vdf"
+    end
+    local prog86 = os.getenv("ProgramFiles(x86)") or os.getenv("PROGRAMFILES(X86)") or ""
+    if prog86 ~= "" then candidate_paths[#candidate_paths+1] = prog86 .. "/Steam/config/config.vdf" end
+    local prog = os.getenv("PROGRAMFILES") or os.getenv("ProgramFiles") or ""
+    if prog ~= "" and prog ~= prog86 then candidate_paths[#candidate_paths+1] = prog .. "/Steam/config/config.vdf" end
+    local steam_path = os.getenv("STEAM_PATH") or ""
+    if steam_path ~= "" then candidate_paths[#candidate_paths+1] = steam_path .. "/config/config.vdf" end
+
+    local raw_value = nil
+    local found_path = nil
+
+    for _, p in ipairs(candidate_paths) do
+        local f = io.open(p, "r")
+        if f then
+            local content = f:read("*a") or ""
+            f:close()
+            if content ~= "" then
+                found_path = p
+                local lower = content:lower()
+                -- Look for any key containing "startup" with a quoted value
+                -- Example: "StartupLocation"  "1"  or "startupwindow" "library"
+                for key, val in lower:gmatch('"([^"]*startup[^"]*)"%s+"([^"]*)"') do
+                    raw_value = val
+                    logger:info("Found startup key '" .. key .. "' = '" .. val .. "' in " .. p)
+                    break
+                end
+                -- Also try unquoted numeric form: "StartupLocation"  "0" is covered above, but also check without second quotes?
+                if not raw_value then
+                    for key, val in lower:gmatch('"([^"]*startup[^"]*)"%s+([%w%p]+)') do
+                        raw_value = val:gsub('"','')
+                        logger:info("Found startup key (unquoted) '" .. key .. "' = '" .. raw_value .. "' in " .. p)
+                        break
+                    end
+                end
+                if raw_value then break end
+            end
+        end
+    end
+
+    if not raw_value then
+        logger:info("Startup Location not found in config.vdf (checked " .. #candidate_paths .. " paths) - requires manual Library setting")
+        _startup_cache = { found = false, raw = nil, is_library = nil, path = nil }
+        return _startup_cache
+    end
+
+    -- Normalize: trim, remove quotes
+    raw_value = raw_value:gsub('^%s*"',''):gsub('"%s*$',''):gsub("^%s+",""):gsub("%s+$","")
+    local is_library = nil
+    if raw_value:find("libr") then
+        is_library = true
+    elseif raw_value == "0" then
+        -- Heuristic: 0 often maps to Library (default) on Steam
+        is_library = true
+    elseif raw_value:match("^%d+$") then
+        -- Any other numeric value likely means Store/Friends/etc, not Library
+        is_library = false
+    elseif raw_value == "library" or raw_value == "default" then
+        is_library = true
+    else
+        -- String without "libr" => not library (e.g. "store")
+        is_library = false
+    end
+
+    logger:info("Startup Location raw='" .. tostring(raw_value) .. "' is_library=" .. tostring(is_library) .. " path=" .. tostring(found_path))
+    _startup_cache = { found = true, raw = raw_value, is_library = is_library, path = found_path }
+    return _startup_cache
+end
+
 local function ensure_movies_dir()
     if movies_path then
         return movies_path
@@ -210,11 +292,16 @@ local function on_unload()
 end
 
 function get_status()
+    local startup = get_startup_location_info()
     return json_encode({
         has_ffmpeg = ffmpeg_bin ~= nil,
         movie_count = cached_count,
         has_autoplay_patch = has_autoplay_patch(),
-        ftp_serving = true
+        ftp_serving = true,
+        startup_found = startup.found,
+        startup_raw = startup.raw,
+        startup_is_library = startup.is_library,
+        startup_path = startup.path
     })
 end
 

@@ -48,6 +48,7 @@ Drop `.webm` or `.mp4` files into the plugin's `movies/` folder and restart Stea
 
 - Millennium v3+
 - ffmpeg (optional, for thumbnails)
+- Steam → Settings → Interface → **Startup Location** must be set to **Library** (required for the movie to cover the UI on launch)
 
 No Python needed — movies via `https://millennium.ftp` VFS.
 
@@ -61,6 +62,7 @@ The one-liner patches automatically; manual: `./scripts/patch-millennium.sh` (ne
 ## Troubleshooting
 
 - **No movies** — check `movies/` folder
+- **Movie not showing / UI visible behind movie** — ensure Steam → Settings → Interface → Startup Location is set to **Library**, then restart Steam
 - **No thumbnail** — install ffmpeg
 - **Freeze every-other** — stock FTP needs patch; re-run installer without `--no-patch`
 - **No sound** — enable Audio; patch for instant audio
