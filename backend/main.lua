@@ -83,12 +83,15 @@ local function find_python()
     local candidates = {}
     if IS_WINDOWS then
         candidates = {
-            { "where python",  { file = "python.exe" } },
-            { "where python3", { file = "python3.exe" } },
-            { "where py",      { file = "py.exe", args = { "-3" } } }
+            { "where python",  { parallel = "" }, "python" },
+            { "where python3", { parallel = "" }, "python3" },
+            { "where py",      { args = { "-3" } }, "py" }
         }
     else
-        candidates = { { "which python3 2>/dev/null", {} }, { "which python 2>/dev/null", {} } }
+        candidates = {
+            { "which python3 2>/dev/null", { parallel = "" }, "python3" },
+            { "which python 2>/dev/null",  { parallel = "" }, "python" }
+        }
     end
     for _, cand in ipairs(candidates) do
         local handle = io.popen(cand[1])
@@ -97,9 +100,23 @@ local function find_python()
             handle:close()
             result = result:gsub("[ \t\r\n]+$", "")
             if result ~= "" and not result:find("INFO: Could not find", 1, true) then
-                python_bin = { cmd = result, launch = cand[2] or {} }
-                logger:info("Found python: " .. result)
-                return python_bin
+                -- validate it actually runs python (rejects the Microsoft Store
+                -- WindowsApps python.exe stub, which just launches the Store)
+                local test
+                if IS_WINDOWS then
+                    local exe = result:match("^%s*(.+)%s*$")
+                    test = io.popen('powershell -NoProfile -Command "& \'' .. exe .. '\' --version 2>&1"')
+                else
+                    test = io.popen('"' .. result .. '" --version 2>&1')
+                end
+                local ver = test and (test:read("*a") or "") or ""
+                if test then test:close() end
+                if ver:upper():find("PYTHON") then
+                    python_bin = { cmd = result, launch = cand[2] or {} }
+                    logger:info("Found python: " .. result .. " (" .. ver:gsub("[ \t\r\n]+$", "") .. ")")
+                    return python_bin
+                end
+                logger:warn(cand[3] .. " exists but is not a working python (" .. ver:gsub("[ \t\r\n]+$", "") .. ") - trying next")
             end
         end
     end
@@ -107,13 +124,12 @@ local function find_python()
     return nil
 end
 
-local function server_alive(pid)
+local function server_listening(port, pid)
     if IS_WINDOWS then
-        if not pid then return false end
-        local h = io.popen('tasklist /FI "PID eq ' .. pid .. '" 2>NUL')
+        local h = io.popen('netstat -ano | findstr :' .. port .. ' | findstr LISTENING')
         local r = h and (h:read("*a") or "") or ""
         if h then h:close() end
-        return r:find("PID", 1, true) ~= nil
+        return r:find("LISTENING") ~= nil
     else
         if not pid then return false end
         local h = io.popen("kill -0 " .. pid .. " 2>/dev/null && echo yes || echo no")
@@ -185,7 +201,7 @@ local function start_http_server()
 
         if pid then
             os.execute(IS_WINDOWS and "ping -n 2 127.0.0.1 > NUL" or "sleep 0.3")
-            if server_alive(pid) then
+            if server_listening(port, pid) then
                 server_pid = pid
                 server_port = port
                 server_url = string.format("http://127.0.0.1:%d", port)
