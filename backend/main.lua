@@ -140,17 +140,44 @@ local function server_listening(port, pid)
 end
 
 local function stop_http_server()
-    if server_pid then
-        if IS_WINDOWS then
-            os.execute('powershell -NoProfile -Command "Stop-Process -Id ' .. server_pid .. ' -Force -ErrorAction SilentlyContinue"')
-        else
-            os.execute("kill " .. server_pid .. " 2>/dev/null")
+    if IS_WINDOWS and server_port then
+        -- find the PID listening on our port and kill it (no PID tracking needed)
+        local h = io.popen('netstat -ano | findstr :' .. server_port .. ' | findstr LISTENING')
+        local r = h and (h:read("*a") or "") or ""
+        if h then h:close() end
+        local pid = r:match("LISTENING%s+(%d+)")
+        if pid then
+            os.execute('powershell -NoProfile -Command "Stop-Process -Id ' .. pid .. ' -Force -ErrorAction SilentlyContinue"')
+            logger:info("Stopped movie HTTP server (pid=" .. pid .. ")")
         end
+    elseif server_pid then
+        os.execute("kill " .. server_pid .. " 2>/dev/null")
         logger:info("Stopped movie HTTP server (pid=" .. server_pid .. ")")
     end
     server_pid = nil
     server_url = nil
     server_port = nil
+end
+
+local function launch_http_server_windows(port)
+    local exe = python_bin.cmd
+    local arglist = { "-m", "http.server", tostring(port), "--directory", movies_path, "--bind", "127.0.0.1" }
+    if python_bin.launch and python_bin.launch.args then
+        for _, a in ipairs(python_bin.launch.args) do table.insert(arglist, 1, a) end
+    end
+    local args_ps = {}
+    for _, a in ipairs(arglist) do args_ps[#args_ps + 1] = "'" .. tostring(a):gsub("'", "''") .. "'" end
+
+    -- Redirect stdio to files so the detached http.server child cannot hold the
+    -- shell's stdout pipe (which would block the calling process on Windows).
+    local outFile = os.getenv("TEMP") or os.getenv("TMP") or "."
+    outFile = outFile .. "\\sm_srv_" .. port .. ".log"
+    local ps = string.format(
+        "$p = Start-Process -FilePath '%s' -ArgumentList %s -WindowStyle Hidden -PassThru -RedirectStandardOutput '%s' -RedirectStandardError '%s'; exit",
+        exe, table.concat(args_ps, ","), outFile, outFile
+    )
+    os.execute('powershell -NoProfile -Command "' .. ps:gsub('"', '\\"') .. '"')
+    os.execute("ping -n 2 127.0.0.1 > NUL")
 end
 
 local function start_http_server()
@@ -171,22 +198,20 @@ local function start_http_server()
         local port = base_port + i
         local pid = nil
         if IS_WINDOWS then
-            local exe = python_bin.cmd
-            local arglist = { "-m", "http.server", tostring(port), "--directory", movies_path, "--bind", "127.0.0.1" }
-            if python_bin.launch and python_bin.launch.args then
-                for _, a in ipairs(python_bin.launch.args) do table.insert(arglist, 1, a) end
+            launch_http_server_windows(port)
+            -- port check doubles as the launch-confirm; get pid from netstat after
+            if server_listening(port, nil) then
+                local h = io.popen('netstat -ano | findstr :' .. port .. ' | findstr LISTENING')
+                local r = h and (h:read("*a") or "") or ""
+                if h then h:close() end
+                pid = tonumber(r:match("LISTENING%s+(%d+)"))
+                server_pid = pid
+                server_port = port
+                server_url = string.format("http://127.0.0.1:%d", port)
+                logger:info(string.format("Movie HTTP server on port %d (pid=%s)", port, tostring(pid or "?")))
+                return server_url
             end
-            local args_ps = {}
-            for _, a in ipairs(arglist) do args_ps[#args_ps + 1] = "'" .. tostring(a):gsub("'", "''") .. "'" end
-            local ps = string.format(
-                "$p = Start-Process -FilePath '%s' -ArgumentList %s -WindowStyle Hidden -PassThru; Write-Output $p.Id",
-                exe, table.concat(args_ps, ",")
-            )
-            local h = io.popen('powershell -NoProfile -Command "' .. ps:gsub('"', '\\"') .. '"')
-            if h then
-                pid = tonumber((h:read("*a") or ""):match("%d+"))
-                h:close()
-            end
+            stop_http_server()
         else
             local cmd = string.format(
                 '"%s" -m http.server %d --directory "%s" --bind 127.0.0.1 > /dev/null 2>&1 & echo $!',
@@ -197,11 +222,8 @@ local function start_http_server()
                 pid = tonumber((h:read("*a") or ""):match("%d+"))
                 h:close()
             end
-        end
-
-        if pid then
-            os.execute(IS_WINDOWS and "ping -n 2 127.0.0.1 > NUL" or "sleep 0.3")
-            if server_listening(port, pid) then
+            os.execute("sleep 0.3")
+            if pid and server_listening(port, pid) then
                 server_pid = pid
                 server_port = port
                 server_url = string.format("http://127.0.0.1:%d", port)
