@@ -138,8 +138,14 @@ local function stop_http_server()
 end
 
 local function start_http_server()
-    if not movies_path then return nil end
-    if not find_python() then return nil end
+    if not movies_path then
+        logger:warn("Movie HTTP server not started: movies path not set")
+        return nil
+    end
+    if not find_python() then
+        logger:warn("Movie HTTP server not started: python not found")
+        return nil
+    end
     if server_url then return server_url end
 
     local base_port = 18080
@@ -473,7 +479,9 @@ local function on_load()
     millennium.add_browser_js("frontend/steam-hide.js")
 
     find_ffmpeg()
+    get_movies()
     start_http_server()
+    cached_movies = nil
     get_movies()
     logger:info("Found " .. cached_count .. " movie files (served via " .. tostring(server_url or "none") .. ")")
 
