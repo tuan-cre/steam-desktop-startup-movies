@@ -15,15 +15,16 @@ Then add `.webm`/`.mp4` to `movies/` and restart Steam.
 curl -fsSL .../install.sh | bash -s -- --no-patch
 ```
 
-**Windows — PowerShell:**
+**Windows — PowerShell (run as Administrator):**
 ```powershell
 irm https://raw.githubusercontent.com/tuan-cre/steam-desktop-startup-movies/windows-support/scripts/install.ps1 | iex
 ```
-Then add `.webm`/`.mp4` to `%LOCALAPPDATA%\millennium\plugins\startup-movies\movies\` and restart Steam.
+Then add `.webm`/`.mp4` to `C:\Program Files (x86)\Steam\millennium\plugins\startup-movies\movies\` and restart Steam.
 
 > **Windows note:** the plugin runs on stock Millennium using the muted-first hybrid
 > audio fallback (works out of the box). The optional Linux-only Millennium patch that
-> enables *instant* unmuted audio does not yet exist for Windows.
+> enables *instant* unmuted audio does not yet exist for Windows. The plugin ships with a
+> prebuilt frontend, so **no Node.js/npm is required**.
 
 **Manual:**
 ```bash

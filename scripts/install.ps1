@@ -17,11 +17,23 @@ $Branch = "windows-support"
 $PluginName = "startup-movies"
 
 if ([string]::IsNullOrEmpty($Dir)) {
-    $Dir = Join-Path $env:LOCALAPPDATA "millennium\plugins\$PluginName"
+    # Steam install dir holds the real Millennium plugins folder on Windows.
+    # Prefer Program Files (x86) (default Steam install); fall back to LOCALAPPDATA.
+    $prog86 = [Environment]::GetFolderPath("ProgramFilesX86")
+    if ($prog86 -and (Test-Path (Join-Path $prog86 "Steam"))) {
+        $Dir = Join-Path $prog86 "Steam\millennium\plugins\$PluginName"
+    } else {
+        $Dir = Join-Path $env:LOCALAPPDATA "millennium\plugins\$PluginName"
+        Write-Warning "Steam not found under Program Files (x86) - falling back to $Dir. If Steam is installed elsewhere, pass -Dir."
+    }
 }
 
 Write-Host "=== Startup Movies installer (Windows, FTP VFS) ==="
 Write-Host "Target: $Dir"
+
+if ((Test-Path $Dir) -and -not ((Get-Acl $Dir).Access | Where-Object { $_.IdentityReference -eq $env:USERNAME -and $_.FileSystemRights -match "Write|Modify|FullControl" })) {
+    Write-Host "NOTE: '$Dir' may require admin rights. If install fails, re-run PowerShell 'As Administrator'."
+}
 
 # --- build from source or release zip ---
 function Invoke-GitClone([string]$target) {
