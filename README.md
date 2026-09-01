@@ -4,7 +4,7 @@ A [Millennium](https://millennium.dev/) plugin that plays a custom startup movie
 
 ## Installation
 
-**One-liner (installs plugin + patches Millennium for stable playback):**
+**Linux — one-liner (installs plugin + patches Millennium for stable playback):**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/tuan-cre/steam-desktop-startup-movies/master/scripts/install.sh | bash
 ```
@@ -14,6 +14,16 @@ Then add `.webm`/`.mp4` to `movies/` and restart Steam.
 # skip patch (stock 3.4.1 may freeze every-other with FTP)
 curl -fsSL .../install.sh | bash -s -- --no-patch
 ```
+
+**Windows — PowerShell:**
+```powershell
+irm https://raw.githubusercontent.com/tuan-cre/steam-desktop-startup-movies/windows-support/scripts/install.ps1 | iex
+```
+Then add `.webm`/`.mp4` to `%LOCALAPPDATA%\millennium\plugins\startup-movies\movies\` and restart Steam.
+
+> **Windows note:** the plugin runs on stock Millennium using the muted-first hybrid
+> audio fallback (works out of the box). The optional Linux-only Millennium patch that
+> enables *instant* unmuted audio does not yet exist for Windows.
 
 **Manual:**
 ```bash
@@ -57,7 +67,12 @@ No Python needed — movies via `https://millennium.ftp` VFS.
 - **Stock** — muted-first hybrid (small delay, no freeze)
 - **Patched** — instant sound (`--autoplay-policy=no-user-gesture-required`)
 
-The one-liner patches automatically; manual: `./scripts/patch-millennium.sh` (needs `cmake` `gcc -m32`).
+The one-liner patches automatically; manual: `./scripts/patch-millennium.sh` (needs `cmake` `gcc -m32`). The autoplay patch is **Linux-only** — Windows always uses the stock muted-first hybrid.
+
+> Windows note: Startup Location auto-detection reads `config.vdf` from
+> `%APPDATA%\Steam\config\` / `%LOCALAPPDATA%\Steam\config\`. If it can't find it, the
+> plugin falls back to a manual-verify notice — just set Startup Location to **Library**
+> in Steam settings.
 
 ## Troubleshooting
 

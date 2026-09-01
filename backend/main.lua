@@ -13,11 +13,22 @@ local ffmpeg_bin = nil
 -- served via Fetch.fulfillRequest with proper mime. No python http.server needed.
 local FTP_BASE = "https://millennium.ftp"
 
+-- Platform detection and shell helpers (Linux vs Windows)
+local IS_WINDOWS = package.config:sub(1,1) == "\\"
+local SHELL_WHICH = IS_WINDOWS and "where ffmpeg" or "which ffmpeg 2>/dev/null"
+
 local function ftp_url_from_path(abs_path)
     -- mirrors utils::url::encode_url + get_url_from_path (src/include/millennium/url_parser.h:79)
     -- On Linux: FTP_BASE + encode(path without leading "/")
+    -- On Windows: FTP_BASE + encode(path with "/" separators, no leading "/")
     local p = abs_path
-    if p:sub(1,1) == "/" then p = p:sub(2) end
+    if IS_WINDOWS then
+        -- normalize separators; keep drive prefix (C:/...) so it mirrors get_url_from_path
+        p = p:gsub("\\", "/")
+        if p:sub(1,1) == "/" then p = p:sub(2) end
+    else
+        if p:sub(1,1) == "/" then p = p:sub(2) end
+    end
     local function enc_char(c)
         local b = string.byte(c)
         if (b >= 48 and b <= 57) or (b >= 65 and b <= 90) or (b >= 97 and b <= 122)
@@ -35,12 +46,15 @@ end
 
 local function find_ffmpeg()
     if ffmpeg_bin then return ffmpeg_bin end
-    local handle = io.popen("which ffmpeg 2>/dev/null")
+    local handle = io.popen(SHELL_WHICH)
     if handle then
         local result = handle:read("*a")
         handle:close()
-        result = result:match("^%s*(.-)%s*$")
-        if result and result ~= "" then
+        -- multiple matches possible on Windows (ffmpeg.exe); take first line.
+        -- reject the "INFO: Could not find files..." stdout that `where` prints when missing.
+        result = result:match("^[^\r\n]+") or ""
+        result = result:gsub("[ \t\r\n]+$", "")
+        if result ~= "" and not result:find("INFO: Could not find", 1, true) and result:lower():find("ffmpeg") then
             ffmpeg_bin = result
             logger:info("Found ffmpeg: " .. ffmpeg_bin)
             return ffmpeg_bin
@@ -54,20 +68,32 @@ local _has_autoplay_patch = nil
 local function has_autoplay_patch()
     if _has_autoplay_patch ~= nil then return _has_autoplay_patch end
     -- check steamwebhelper cmdline for --autoplay-policy flag (patched Millennium)
-    local h = io.popen("ps aux 2>/dev/null | grep -q 'autoplay-policy' && echo yes || echo no")
-    if h then
-        local r = h:read("*a") or ""
-        h:close()
-        _has_autoplay_patch = r:find("yes") ~= nil
-        if _has_autoplay_patch then
-            logger:info("Detected autoplay patch (steamwebhelper has --autoplay-policy)")
-        else
-            logger:info("No autoplay patch - using muted-first hybrid fallback")
+    local detected = false
+    if IS_WINDOWS then
+        -- Windows: steamwebhelper.exe command line via wmic (XP+/works without extra deps)
+        local h = io.popen('wmic process where "name=\'steamwebhelper.exe\'" get commandline /value 2>NUL')
+        if h then
+            local r = h:read("*a") or ""
+            h:close()
+            detected = r:find("autoplay%-policy") ~= nil
         end
-        return _has_autoplay_patch
+        -- fallback: check installed Millennium lib presence of the flag is unreliable on Windows
+        -- (dll injection differs); if wmic gave nothing, treat as stock -> hybrid fallback
+    else
+        local h = io.popen("ps aux 2>/dev/null | grep -q 'autoplay-policy' && echo yes || echo no")
+        if h then
+            local r = h:read("*a") or ""
+            h:close()
+            detected = r:find("yes") ~= nil
+        end
     end
-    _has_autoplay_patch = false
-    return false
+    _has_autoplay_patch = detected
+    if _has_autoplay_patch then
+        logger:info("Detected autoplay patch (steamwebhelper has --autoplay-policy)")
+    else
+        logger:info("No autoplay patch - using muted-first hybrid fallback")
+    end
+    return _has_autoplay_patch
 end
 
 local _startup_cache = nil
@@ -75,15 +101,28 @@ local function get_startup_location_info()
     if _startup_cache ~= nil then return _startup_cache end
 
     local candidate_paths = {}
+    local sep = IS_WINDOWS and "\\" or "/"
     local home = os.getenv("HOME") or os.getenv("USERPROFILE") or ""
-    if home ~= "" then
-        candidate_paths[#candidate_paths+1] = home .. "/.steam/steam/config/config.vdf"
-        candidate_paths[#candidate_paths+1] = home .. "/.local/share/Steam/config/config.vdf"
-        candidate_paths[#candidate_paths+1] = home .. "/.steam/config/config.vdf"
-        candidate_paths[#candidate_paths+1] = home .. "/.steam/root/config/config.vdf"
-        candidate_paths[#candidate_paths+1] = home .. "/.var/app/com.valvesoftware.Steam/config/config.vdf"
-        -- flatpak / snap variants
-        candidate_paths[#candidate_paths+1] = home .. "/snap/steam/common/.steam/steam/config/config.vdf"
+
+    if IS_WINDOWS then
+        -- Windows Steam keeps per-user config (StartupLocation lives here)
+        local appdata = os.getenv("APPDATA") or ""
+        if appdata ~= "" then candidate_paths[#candidate_paths+1] = appdata .. sep .. "Steam" .. sep .. "config" .. sep .. "config.vdf" end
+        if home ~= "" then
+            candidate_paths[#candidate_paths+1] = home .. sep .. "AppData" .. sep .. "Local" .. sep .. "Steam" .. sep .. "config" .. sep .. "config.vdf"
+            candidate_paths[#candidate_paths+1] = home .. sep .. "Application Data" .. sep .. "Steam" .. sep .. "config" .. sep .. "config.vdf"
+        end
+        -- install dir stubs (forward slashes also accepted by io.open on Windows)
+    else
+        if home ~= "" then
+            candidate_paths[#candidate_paths+1] = home .. "/.steam/steam/config/config.vdf"
+            candidate_paths[#candidate_paths+1] = home .. "/.local/share/Steam/config/config.vdf"
+            candidate_paths[#candidate_paths+1] = home .. "/.steam/config/config.vdf"
+            candidate_paths[#candidate_paths+1] = home .. "/.steam/root/config/config.vdf"
+            candidate_paths[#candidate_paths+1] = home .. "/.var/app/com.valvesoftware.Steam/config/config.vdf"
+            -- flatpak / snap variants
+            candidate_paths[#candidate_paths+1] = home .. "/snap/steam/common/.steam/steam/config/config.vdf"
+        end
     end
     local prog86 = os.getenv("ProgramFiles(x86)") or os.getenv("PROGRAMFILES(X86)") or ""
     if prog86 ~= "" then candidate_paths[#candidate_paths+1] = prog86 .. "/Steam/config/config.vdf" end
@@ -173,7 +212,11 @@ local function ensure_movies_dir()
     movies_path = path
 
     local thumbs = fs.join(path, "thumbs")
-    os.execute('mkdir -p "' .. thumbs .. '" 2>/dev/null')
+    if IS_WINDOWS then
+        os.execute(string.format('powershell -NoProfile -Command "New-Item -ItemType Directory -Force -Path \'%s\' | Out-Null"', thumbs))
+    else
+        os.execute('mkdir -p "' .. thumbs .. '" 2>/dev/null')
+    end
     if fs.exists(thumbs) then
         thumbs_path = thumbs
         logger:info("Thumbnails directory: " .. thumbs)
@@ -192,10 +235,20 @@ local function generate_thumbnail(movie_path, movie_name)
     local thumb_path = fs.join(thumbs_path, thumb_name)
 
     if not fs.exists(thumb_path) then
-        local cmd = string.format(
-            '"%s" -y -i "%s" -ss 00:00:01 -vframes 1 -q:v 2 "%s" 2>/dev/null &',
-            ffmpeg_bin, movie_path, thumb_path
-        )
+        -- Windows: PowerShell start-process for async so os.execute doesn't block on spawned ffmpeg
+        local redirect = IS_WINDOWS and '2>$null' or '2>/dev/null'
+        local cmd
+        if IS_WINDOWS then
+            cmd = string.format(
+                'powershell -NoProfile -Command "Start-Process -FilePath \'%s\' -ArgumentList \'-y\',\'-i\',\'%s\',\'-ss\',\'00:00:01\',\'-vframes\',\'1\',\'-q:v\',\'2\',\'%s\' -WindowStyle Hidden -Wait" %s',
+                ffmpeg_bin, movie_path, thumb_path, redirect
+            )
+        else
+            cmd = string.format(
+                '"%s" -y -i "%s" -ss 00:00:01 -vframes 1 -q:v 2 "%s" 2>/dev/null &',
+                ffmpeg_bin, movie_path, thumb_path
+            )
+        end
         os.execute(cmd)
         return nil
     end
