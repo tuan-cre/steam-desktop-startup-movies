@@ -1,6 +1,9 @@
 node_modules/
 millennium/
-.millennium/
+.millennium/*
+!.millennium/Dist/
+.millennium/Dist/*
+!.millennium/Dist/index.js
 dist/
 *.log
 movies/*
