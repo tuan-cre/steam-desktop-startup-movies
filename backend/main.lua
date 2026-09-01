@@ -40,7 +40,7 @@ local function ftp_url_from_path(abs_path)
             return string.format("%%%02X", b)
         end
     end
-    local enc = p:gsub("([^%w%-%_%.%~%/ ])", enc_char)
+    local enc = p:gsub("([^%w%-%_%.%~%/])", enc_char)
     return FTP_BASE .. "/" .. enc
 end
 
