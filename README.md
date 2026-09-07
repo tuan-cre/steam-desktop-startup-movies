@@ -30,6 +30,10 @@ Millennium → Settings → Plugins → **Startup Movies**: pick movie, fit, tra
 
 Requires Steam → Settings → Interface → Startup Location → **Library**, or the Store renders over the movie.
 
+## Tip
+
+Turn off Steam → Settings → Interface → "Notify me about additions or changes to my games" so the news popup doesn't cover the movie at launch.
+
 ## Troubleshoot
 
 - No movies — check `movies/` folder, hit Refresh
