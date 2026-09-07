@@ -40,4 +40,6 @@ Turn off Steam → Settings → Interface → "Notify me about additions or chan
 - No thumbnail — install ffmpeg
 - No sound — enable Audio
 
-MIT
+## License
+
+MIT — see [LICENSE](LICENSE).
