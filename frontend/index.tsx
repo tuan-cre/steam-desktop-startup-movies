@@ -3,6 +3,7 @@ import {
     routerHook,
     PanelSection,
     PanelSectionRow,
+    DialogButton,
     Dropdown,
     Millennium,
     EUIMode
@@ -30,9 +31,9 @@ let _onTransitionChange: ((v: "fade" | "none") => void) | null = null;
 let _audioEnabled: boolean = localStorage.getItem(AUDIO_KEY) === "true";
 let _onAudioChange: ((v: boolean) => void) | null = null;
 
-async function callBackend(method: string) {
+async function callBackend(method: string, params: any = {}) {
     try {
-        let result = await Millennium.callServerMethod(method, {});
+        let result = await Millennium.callServerMethod(method, params);
         if (typeof result === "string") {
             try { result = JSON.parse(result); } catch {}
         }
@@ -42,10 +43,27 @@ async function callBackend(method: string) {
     }
 }
 
+// Best-effort: mirror important errors to the backend log. Never throws.
+function logToBackend(message: string) {
+    try {
+        const p = callBackend("log_message", { message: "[frontend] " + message });
+        if (p && (p as any).catch) (p as Promise<void>).catch(() => {});
+    } catch {}
+}
+
 let _cachedMovies: any[] | null = null;
 
-async function loadMovies() {
-    if (_cachedMovies) return _cachedMovies;
+async function loadMovies(force = false) {
+    if (_cachedMovies && !force) return _cachedMovies;
+    if (force) {
+        _cachedMovies = null;
+        // Ask backend to rescan (falls back to cached list on older backends)
+        const refreshed = await callBackend("refresh_movies");
+        if (Array.isArray(refreshed)) {
+            _cachedMovies = refreshed;
+            return _cachedMovies;
+        }
+    }
     const result = await callBackend("get_movies");
     _cachedMovies = Array.isArray(result) ? result : [];
     return _cachedMovies;
@@ -68,8 +86,6 @@ const overlayStyle: React.CSSProperties = {
     alignItems: "center",
     justifyContent: "center",
     cursor: "pointer",
-    isolation: "isolate",
-    transform: "translateZ(0)",
     transition: "opacity 0.4s ease",
 };
 
@@ -127,7 +143,7 @@ function StartupMovieOverlay() {
 
     const handleVideoReady = React.useCallback(() => {
         setVideoReady(true);
-        // Hybrid: try unmuting after decode if patch allows it. Starts muted for stock compatibility.
+        // Hybrid: try unmuting after decode if the autoplay flag allows it. Starts muted for stock-policy compatibility.
         if (_audioEnabled && videoRef.current) {
             try {
                 videoRef.current.muted = false;
@@ -177,6 +193,13 @@ function StartupMovieOverlay() {
             (window as any).__showSteamUI?.();
         }, dismissTimeout);
     }, [dismissTimeout]);
+
+    // Unmount entirely when idle (no video and no black screen) so the
+    // fullscreen layer can't intercept or disturb Steam/Millennium
+    // context menus, hover states, or hit-testing after dismissal.
+    if (!videoUrl && !blackScreen) {
+        return null;
+    }
 
     return (
         <div
@@ -230,20 +253,6 @@ async function tryStartupPlayback() {
         return;
     }
 
-    // Require Library as Startup Location — Store renders as a centered popup
-    // that bleeds through the overlay (top/bottom of movie visible, Store in middle).
-    try {
-        const status = await callBackend("get_status");
-        if (status && status.startup_is_library === false) {
-            // Skip movie to avoid broken display; expose Steam UI immediately
-            if (_setBlackScreen) _setBlackScreen(false);
-            else _pendingNoMovies = true;
-            (window as any).__showSteamUI?.();
-            console.warn("[StartupMovies] Startup Location is '" + status.startup_raw + "' (not Library) — skipping movie to avoid Store overlay. Set Steam > Settings > Interface > Startup Location > Library");
-            return;
-        }
-    } catch {}
-
     if (!sessionStorage.getItem(PLAYED_KEY)) {
         sessionStorage.setItem(PLAYED_KEY, "1");
     }
@@ -254,6 +263,10 @@ async function tryStartupPlayback() {
     } else {
         const saved = localStorage.getItem(MOVIE_KEY);
         movie = saved ? movies.find((m: any) => m.name === saved) : movies[0];
+        if (!movie && movies.length) {
+            console.warn("[StartupMovies] Saved movie '" + saved + "' not found - falling back to " + movies[0].name);
+            movie = movies[0];
+        }
     }
     if (movie?.url) {
         playMovie(movie.url);
@@ -264,7 +277,11 @@ async function tryStartupPlayback() {
     }
 }
 
-tryStartupPlayback();
+tryStartupPlayback().catch((e) => {
+    const msg = "startup playback failed: " + String(e?.message || e);
+    console.error("[StartupMovies] " + msg);
+    logToBackend(msg);
+});
 
 function Panel() {
     const [movies, setMovies] = React.useState<any[]>([]);
@@ -274,11 +291,23 @@ function Panel() {
     const [mode, setMode] = React.useState(_mode);
     const [audioEnabled, setAudioEnabled] = React.useState(_audioEnabled);
     const [status, setStatus] = React.useState<any>(null);
+    const [refreshing, setRefreshing] = React.useState(false);
 
     React.useEffect(() => {
         loadMovies().then(setMovies);
         callBackend("get_status").then(setStatus);
     }, []);
+
+    // Pin selection to a valid movie once the list loads. Without this the
+    // Dropdown can render with a stale/empty value while playback falls back
+    // to movies[0], making it look like "changing movies does nothing".
+    React.useEffect(() => {
+        if (movies.length && (!selected || !movies.find((m: any) => m.name === selected))) {
+            const first = movies[0].name;
+            setSelected(first);
+            localStorage.setItem(MOVIE_KEY, first);
+        }
+    }, [movies, selected]);
 
     const handleMovie = (v: { data: string }) => {
         setSelected(v.data);
@@ -319,43 +348,35 @@ function Panel() {
     const selectedMovie = movies.find((m: any) => m.name === selected);
     const thumbUrl = selectedMovie?.thumb || null;
 
+    const previewSelected = () => {
+        const m = movies.find((mm: any) => mm.name === selected) || movies[0];
+        if (m?.url) playMovie(m.url);
+    };
+
+    const handleRefresh = async () => {
+        setRefreshing(true);
+        try {
+            setMovies(await loadMovies(true));
+            setStatus(await callBackend("get_status"));
+        } finally {
+            setRefreshing(false);
+        }
+    };
+
     const warnings: string[] = [];
-    let hybridInfo: string | null = null;
-    let startupRequirement: { text: string; color: string } | null = null;
+    // Static note: Startup Location can't be auto-detected (modern Steam no
+    // longer stores it in config.vdf), but Library is still required so the
+    // Store doesn't render centered over the movie.
+    const startupRequirement = {
+        text: "Startup Location must be Library (Steam → Settings → Interface)",
+        color: "#7eb0ff",
+    };
     if (status) {
         if (!status.ftp_serving) {
             if (!status.has_python) warnings.push("python3 not found - HTTP server unavailable");
             if (status.has_python && !status.server_running) warnings.push("HTTP server is not running");
         }
         if (!status.has_ffmpeg) warnings.push("ffmpeg not found - thumbnails disabled");
-        if (status.has_autoplay_patch === false && audioEnabled) {
-            hybridInfo = "Stock Millennium detected - audio uses muted-first fallback (no freeze)";
-        } else if (status.has_autoplay_patch === true && audioEnabled) {
-            hybridInfo = "Patched Millennium detected - native unmuted autoplay enabled";
-        }
-        if (status.ftp_serving && movies.length > 0) {
-            hybridInfo = (hybridInfo ? hybridInfo + " | " : "") + "FTP VFS serving (no python)";
-        }
-        // Library requirement: Store as startup renders centered and shows through movie
-        if (status.startup_is_library === false) {
-            startupRequirement = {
-                text: `Startup Location is "${status.startup_raw}" — Store will appear centered over the movie (only top/bottom visible). Fix: Steam → Settings → Interface → Startup Location → Library, then restart.`,
-                color: "#ff6b6b",
-            };
-            warnings.push(`Startup Location is "${status.startup_raw}" — must be Library (Steam → Settings → Interface)`);
-        } else if (status.startup_is_library === true) {
-            startupRequirement = { text: "Startup Location: Library ✓ — movie will cover fullscreen", color: "#59BF40" };
-        } else {
-            startupRequirement = {
-                text: "Requires Steam → Settings → Interface → Startup Location → Library (could not auto-detect — please verify manually)",
-                color: "#7eb0ff",
-            };
-        }
-    } else {
-        startupRequirement = {
-            text: "Requires Steam → Settings → Interface → Startup Location → Library (required so Store doesn't appear centered over the movie)",
-            color: "#7eb0ff",
-        };
     }
 
     return (
@@ -369,19 +390,12 @@ function Panel() {
                 </PanelSectionRow>
             </PanelSection>
         )}
-        {hybridInfo && (
-            <PanelSection title="Compatibility">
-                <PanelSectionRow>
-                    <div style={{ color: "#7eb0ff", fontSize: "12px", lineHeight: "1.5" }}>{hybridInfo}</div>
-                </PanelSectionRow>
-            </PanelSection>
-        )}
-        {startupRequirement && (
-            <PanelSection title="Requirement">
-                <PanelSectionRow>
-                    <div style={{ color: startupRequirement.color, fontSize: "12px", lineHeight: "1.5" }}>{startupRequirement.text}</div>
-                </PanelSectionRow>
-            </PanelSection>
+    {startupRequirement && (
+        <PanelSection title="Requirement">
+            <PanelSectionRow>
+                <div style={{ color: startupRequirement.color, fontSize: "12px", lineHeight: "1.5" }}>{startupRequirement.text}</div>
+            </PanelSectionRow>
+        </PanelSection>
         )}
 
         <PanelSection title="Movie">
@@ -399,26 +413,44 @@ function Panel() {
             ) : (
             <PanelSectionRow>
                 <div style={{ color: "#888", fontSize: "12px" }}>
-                    No movies found. Place .webm or .mp4 files in the plugin's movies/ folder.
+                    No movies found. Place video files (.webm, .mp4, .mkv, .mov, …) in the plugin's movies/ folder.
                 </div>
             </PanelSectionRow>
             )}
 
             {thumbUrl && (
                 <PanelSectionRow>
-                    <div style={{ display: "flex", justifyContent: "center" }}>
+                    <div style={{ display: "flex", justifyContent: "center", width: "100%" }}>
                         <img
                             src={thumbUrl}
                             style={{
-                                width: "200px",
-                                height: "112px",
+                                width: "100%",
+                                aspectRatio: "16 / 9",
                                 objectFit: "contain",
                                 borderRadius: "4px",
-                                display: "block"
+                                display: "block",
+                                background: "#000"
                             }}
                         />
                     </div>
                 </PanelSectionRow>
+            )}
+
+            {movies.length > 0 && (
+            <PanelSectionRow>
+                <div style={{ display: "flex", gap: "8px", width: "100%" }}>
+                    <div style={{ flex: 1 }}>
+                        <DialogButton onClick={previewSelected} style={{ width: "100%" }}>
+                            Preview
+                        </DialogButton>
+                    </div>
+                    <div style={{ flex: 1 }}>
+                        <DialogButton onClick={handleRefresh} disabled={refreshing} style={{ width: "100%" }}>
+                            {refreshing ? "Refreshing..." : "Refresh"}
+                        </DialogButton>
+                    </div>
+                </div>
+            </PanelSectionRow>
             )}
         </PanelSection>
 

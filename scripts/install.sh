@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# One-liner installer for steam-desktop-startup-movies + patched Millennium (FTP VFS stable)
+# One-liner installer for steam-desktop-startup-movies
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/tuan-cre/steam-desktop-startup-movies/master/scripts/install.sh | bash
-#   curl -fsSL .../install.sh | bash -s -- --no-patch   # skip Millennium patch
-#   bash scripts/install.sh [--dir <path>] [--no-build] [--release <zip-url>] [--no-patch]
+#   bash scripts/install.sh [--dir <path>] [--no-build] [--release <zip-url>]
 set -euo pipefail
 
 REPO="https://github.com/tuan-cre/steam-desktop-startup-movies.git"
@@ -13,7 +12,6 @@ PLUGIN_NAME="startup-movies"
 INSTALL_DIR=""
 NO_BUILD=0
 RELEASE_URL=""
-WITH_PATCH=1  # default: patch Millennium for FTP stability (no freeze)
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -21,14 +19,16 @@ while [[ $# -gt 0 ]]; do
         --no-build) NO_BUILD=1; shift ;;
         --release) RELEASE_URL="$2"; shift 2 ;;
         --branch) BRANCH="$2"; shift 2 ;;
-        --no-patch|--without-patch) WITH_PATCH=0; shift ;;
-        --patch|--with-patch) WITH_PATCH=1; shift ;;
+        # Deprecated patch flags: accepted for compatibility, patching is always skipped
+        # (recent Steam ships --autoplay-policy stock).
+        --no-patch|--without-patch) shift ;;
+        --patch|--with-patch) echo "NOTE: --patch is deprecated (Steam ships --autoplay-policy stock now). Ignoring."; shift ;;
         -h|--help)
-            echo "Usage: install.sh [--dir <path>] [--no-build] [--release <zip-url>] [--branch <branch>] [--no-patch]"
+            echo "Usage: install.sh [--dir <path>] [--no-build] [--release <zip-url>] [--branch <branch>]"
             echo "  --dir      Custom plugin dir (default: \$XDG_DATA_HOME/millennium/plugins/$PLUGIN_NAME)"
             echo "  --no-build Skip npm build if frontend/index.js missing"
             echo "  --release  Install from prebuilt zip (no git/node)"
-            echo "  --no-patch Skip Millennium autoplay patch (FTP may freeze every-other on stock 3.4.1)"
+            echo "  --no-patch Accepted for compatibility (patching is deprecated, always skipped)"
             exit 0
             ;;
         *) echo "Unknown arg: $1" >&2; exit 1 ;;
@@ -40,7 +40,7 @@ if [[ -z "$INSTALL_DIR" ]]; then
     INSTALL_DIR="$XDG_DATA/millennium/plugins/$PLUGIN_NAME"
 fi
 
-echo "=== Startup Movies installer (FTP VFS + Millennium patch) ==="
+echo "=== Startup Movies installer ==="
 echo "Target: $INSTALL_DIR"
 
 if [[ ! -d "${XDG_DATA_HOME:-$HOME/.local/share}/millennium" && ! -d "$HOME/.millennium" ]]; then
@@ -97,44 +97,15 @@ else
     fi
 fi
 
-# --- Millennium autoplay patch (required for FTP VFS no-freeze on 3.4.1 stock) ---
-if [[ $WITH_PATCH -eq 0 ]]; then
-    echo ""
-    echo "Skipping Millennium patch (--no-patch). FTP may freeze every-other on stock 3.4.1 (http_hooks.cc:314 timeout / reload 37:48)."
-else
-    echo ""
-    echo "=== Millennium patch check (FTP requires --autoplay-policy) ==="
-    if grep -q "autoplay-policy" /usr/lib/millennium/libmillennium_x86.so 2>/dev/null; then
-        echo "Already patched (autoplay-policy in /usr/lib/millennium/libmillennium_x86.so), skipping build."
-    else
-        # also check running steamwebhelper cmdline
-        if ps aux 2>/dev/null | grep -q "autoplay-policy"; then
-            echo "Running steamwebhelper already has autoplay-policy, skipping."
-        else
-            echo "Stock Millennium detected — patching for stable FTP (video muted-first hybrid + instant audio)..."
-            # prefer local patch script if present (installed plugin or repo)
-            PATCH_SCRIPT=""
-            if [[ -f "$INSTALL_DIR/scripts/patch-millennium.sh" ]]; then
-                PATCH_SCRIPT="$INSTALL_DIR/scripts/patch-millennium.sh"
-            elif [[ -f "$(dirname "$0")/patch-millennium.sh" ]]; then
-                PATCH_SCRIPT="$(dirname "$0")/patch-millennium.sh"
-            fi
-            if [[ -n "$PATCH_SCRIPT" && -f "$PATCH_SCRIPT" ]]; then
-                echo "Running $PATCH_SCRIPT ..."
-                bash "$PATCH_SCRIPT" || echo "WARN: patch script failed, continue anyway"
-            else
-                echo "Fetching patch script..."
-                curl -fsSL https://raw.githubusercontent.com/tuan-cre/steam-desktop-startup-movies/master/scripts/patch-millennium.sh | bash || echo "WARN: fetch patch failed"
-            fi
-        fi
-    fi
-fi
+# --- Millennium autoplay patch (DEPRECATED: Steam ships --autoplay-policy stock) ---
+echo ""
+echo "Skipping Millennium patch (deprecated - not needed on recent Steam)."
 
 echo ""
 echo "=== Done ==="
 echo "Plugin: $INSTALL_DIR"
 echo "Movies: $INSTALL_DIR/movies/ (.webm/.mp4)"
 command -v ffmpeg >/dev/null 2>&1 && echo "ffmpeg: $(which ffmpeg) (thumbnails on)" || echo "ffmpeg: not found (optional)"
-echo "Millennium: $(grep -q autoplay-policy /usr/lib/millennium/libmillennium_x86.so 2>/dev/null && echo "patched (stable FTP)" || echo "stock (FTP may freeze — re-run with --patch)")"
+echo "Millennium: unmuted autoplay comes stock with recent Steam (no patch needed)"
 echo ""
 echo "Restart Steam to apply. Verify: grep startup-movies ~/.local/share/Steam/logs/millennium.log | tail -5"

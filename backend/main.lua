@@ -50,106 +50,45 @@ local function find_ffmpeg()
     return nil
 end
 
-local _has_autoplay_patch = nil
-local function has_autoplay_patch()
-    if _has_autoplay_patch ~= nil then return _has_autoplay_patch end
-    -- check steamwebhelper cmdline for --autoplay-policy flag (patched Millennium)
+local _has_autoplay_flag = nil
+local function has_autoplay_flag()
+    if _has_autoplay_flag ~= nil then return _has_autoplay_flag end
+    -- NOTE: this only observes whether steamwebhelper runs with
+    -- --autoplay-policy (unmuted autoplay available). Recent Steam clients
+    -- ship the flag stock, so "flag present" no longer means "patched".
     local h = io.popen("ps aux 2>/dev/null | grep -q 'autoplay-policy' && echo yes || echo no")
     if h then
         local r = h:read("*a") or ""
         h:close()
-        _has_autoplay_patch = r:find("yes") ~= nil
-        if _has_autoplay_patch then
-            logger:info("Detected autoplay patch (steamwebhelper has --autoplay-policy)")
+        _has_autoplay_flag = r:find("yes") ~= nil
+        if _has_autoplay_flag then
+            logger:info("Observed --autoplay-policy in steamwebhelper cmdline (unmuted autoplay available)")
         else
-            logger:info("No autoplay patch - using muted-first hybrid fallback")
+            logger:info("No --autoplay-policy flag - using muted-first hybrid fallback")
         end
-        return _has_autoplay_patch
+        return _has_autoplay_flag
     end
-    _has_autoplay_patch = false
+    _has_autoplay_flag = false
     return false
 end
 
-local _startup_cache = nil
-local function get_startup_location_info()
-    if _startup_cache ~= nil then return _startup_cache end
+-- Video extensions Chromium (steamwebhelper) can actually decode.
+-- Listed broadly; unplayable files fail gracefully in the frontend (onError -> dismiss).
+local VIDEO_EXTS = {
+    [".webm"] = true,
+    [".mp4"] = true,
+    [".m4v"] = true,
+    [".mov"] = true,
+    [".mkv"] = true,
+    [".ogv"] = true,
+    [".ogg"] = true,
+}
 
-    local candidate_paths = {}
-    local home = os.getenv("HOME") or os.getenv("USERPROFILE") or ""
-    if home ~= "" then
-        candidate_paths[#candidate_paths+1] = home .. "/.steam/steam/config/config.vdf"
-        candidate_paths[#candidate_paths+1] = home .. "/.local/share/Steam/config/config.vdf"
-        candidate_paths[#candidate_paths+1] = home .. "/.steam/config/config.vdf"
-        candidate_paths[#candidate_paths+1] = home .. "/.steam/root/config/config.vdf"
-        candidate_paths[#candidate_paths+1] = home .. "/.var/app/com.valvesoftware.Steam/config/config.vdf"
-        -- flatpak / snap variants
-        candidate_paths[#candidate_paths+1] = home .. "/snap/steam/common/.steam/steam/config/config.vdf"
-    end
-    local prog86 = os.getenv("ProgramFiles(x86)") or os.getenv("PROGRAMFILES(X86)") or ""
-    if prog86 ~= "" then candidate_paths[#candidate_paths+1] = prog86 .. "/Steam/config/config.vdf" end
-    local prog = os.getenv("PROGRAMFILES") or os.getenv("ProgramFiles") or ""
-    if prog ~= "" and prog ~= prog86 then candidate_paths[#candidate_paths+1] = prog .. "/Steam/config/config.vdf" end
-    local steam_path = os.getenv("STEAM_PATH") or ""
-    if steam_path ~= "" then candidate_paths[#candidate_paths+1] = steam_path .. "/config/config.vdf" end
-
-    local raw_value = nil
-    local found_path = nil
-
-    for _, p in ipairs(candidate_paths) do
-        local f = io.open(p, "r")
-        if f then
-            local content = f:read("*a") or ""
-            f:close()
-            if content ~= "" then
-                found_path = p
-                local lower = content:lower()
-                -- Look for any key containing "startup" with a quoted value
-                -- Example: "StartupLocation"  "1"  or "startupwindow" "library"
-                for key, val in lower:gmatch('"([^"]*startup[^"]*)"%s+"([^"]*)"') do
-                    raw_value = val
-                    logger:info("Found startup key '" .. key .. "' = '" .. val .. "' in " .. p)
-                    break
-                end
-                -- Also try unquoted numeric form: "StartupLocation"  "0" is covered above, but also check without second quotes?
-                if not raw_value then
-                    for key, val in lower:gmatch('"([^"]*startup[^"]*)"%s+([%w%p]+)') do
-                        raw_value = val:gsub('"','')
-                        logger:info("Found startup key (unquoted) '" .. key .. "' = '" .. raw_value .. "' in " .. p)
-                        break
-                    end
-                end
-                if raw_value then break end
-            end
-        end
-    end
-
-    if not raw_value then
-        logger:info("Startup Location not found in config.vdf (checked " .. #candidate_paths .. " paths) - requires manual Library setting")
-        _startup_cache = { found = false, raw = nil, is_library = nil, path = nil }
-        return _startup_cache
-    end
-
-    -- Normalize: trim, remove quotes
-    raw_value = raw_value:gsub('^%s*"',''):gsub('"%s*$',''):gsub("^%s+",""):gsub("%s+$","")
-    local is_library = nil
-    if raw_value:find("libr") then
-        is_library = true
-    elseif raw_value == "0" then
-        -- Heuristic: 0 often maps to Library (default) on Steam
-        is_library = true
-    elseif raw_value:match("^%d+$") then
-        -- Any other numeric value likely means Store/Friends/etc, not Library
-        is_library = false
-    elseif raw_value == "library" or raw_value == "default" then
-        is_library = true
-    else
-        -- String without "libr" => not library (e.g. "store")
-        is_library = false
-    end
-
-    logger:info("Startup Location raw='" .. tostring(raw_value) .. "' is_library=" .. tostring(is_library) .. " path=" .. tostring(found_path))
-    _startup_cache = { found = true, raw = raw_value, is_library = is_library, path = found_path }
-    return _startup_cache
+local function is_video_file(name)
+    local ext = fs.extension(name)
+    if not ext or ext == "" then return false, nil end
+    ext = ext:lower()
+    return VIDEO_EXTS[ext] == true, ext
 end
 
 local function ensure_movies_dir()
@@ -187,20 +126,29 @@ end
 local function generate_thumbnail(movie_path, movie_name)
     if not thumbs_path or not ffmpeg_bin then return nil end
 
-    local base = movie_name:sub(1, -(#movie_name:match("%.([^%.]+)$") or 0) - 2)
-    local thumb_name = base .. ".jpg"
-    local thumb_path = fs.join(thumbs_path, thumb_name)
+    local ok, thumb_url = pcall(function()
+        local movie_ext = movie_name:match("%.([^%.]+)$") or ""
+        -- ext has NO dot here, so drop #ext + 1 (dot) chars: sub end = -(#ext + 2)
+        local base = movie_name:sub(1, -(#movie_ext + 2))
+        local thumb_name = base .. ".jpg"
+        local thumb_path = fs.join(thumbs_path, thumb_name)
 
-    if not fs.exists(thumb_path) then
-        local cmd = string.format(
-            '"%s" -y -i "%s" -ss 00:00:01 -vframes 1 -q:v 2 "%s" 2>/dev/null &',
-            ffmpeg_bin, movie_path, thumb_path
-        )
-        os.execute(cmd)
+        if not fs.exists(thumb_path) then
+            local cmd = string.format(
+                '"%s" -y -i "%s" -ss 00:00:01 -vframes 1 -q:v 2 "%s" 2>/dev/null &',
+                ffmpeg_bin, movie_path, thumb_path
+            )
+            os.execute(cmd)
+            return nil
+        end
+
+        return ftp_url_from_path(thumb_path)
+    end)
+    if not ok then
+        logger:warn("Thumbnail failed for '" .. tostring(movie_name) .. "': " .. tostring(thumb_url))
         return nil
     end
-
-    return ftp_url_from_path(thumb_path)
+    return thumb_url
 end
 
 function json_encode(obj)
@@ -236,42 +184,71 @@ end
 function get_movies()
     if cached_movies then return cached_movies end
 
-    local path = ensure_movies_dir()
-    if not path then return "[]" end
+    local ok, result_json = pcall(function()
+        local path = ensure_movies_dir()
+        if not path then return "[]" end
 
-    local entries, err = fs.list(path)
-    if not entries then
-        logger:error("Failed to list movies: " .. tostring(err))
+        local entries, err = fs.list(path)
+        if not entries then
+            logger:error("Failed to list movies dir '" .. tostring(path) .. "': " .. tostring(err))
+            return "[]"
+        end
+
+        local result = {}
+        local seen = {}
+        local skipped = 0
+        local ok_sort, sort_err = pcall(table.sort, entries, function(a, b) return (a.name or "") < (b.name or "") end)
+        if not ok_sort then
+            logger:warn("Could not sort movie entries: " .. tostring(sort_err))
+        end
+        for _, entry in ipairs(entries) do
+            local ok_entry, entry_err = pcall(function()
+                if entry.is_file and entry.name then
+                    local name = entry.name
+                    local is_video, ext = is_video_file(name)
+                    if is_video then
+                        local base = name:sub(1, -(#ext + 1)):lower()
+                        if not seen[base] then
+                            seen[base] = true
+                            local abs_path = fs.join(path, name)
+                            local url = ftp_url_from_path(abs_path)
+                            local thumb = generate_thumbnail(abs_path, name)
+                            table.insert(result, {
+                                name = name,
+                                size = entry.size or 0,
+                                url = url,
+                                thumb = thumb
+                            })
+                        end
+                    else
+                        skipped = skipped + 1
+                    end
+                end
+            end)
+            if not ok_entry then
+                logger:warn("Skipping bad movie entry '" .. tostring(entry and entry.name) .. "': " .. tostring(entry_err))
+            end
+        end
+
+        if skipped > 0 then
+            logger:info("Skipped " .. skipped .. " non-video file(s) in movies/")
+        end
+        cached_count = #result
+        return json_encode(result)
+    end)
+
+    if not ok then
+        logger:error("get_movies failed: " .. tostring(result_json))
         return "[]"
     end
 
-    local result = {}
-    local seen = {}
-    for _, entry in ipairs(entries) do
-        if entry.is_file then
-            local name = entry.name
-            local ext = fs.extension(name)
-            if ext == ".webm" or ext == ".mp4" then
-                local base = name:sub(1, -(#ext + 1))
-                if not seen[base] then
-                    seen[base] = true
-                    local abs_path = fs.join(path, name)
-                    local url = ftp_url_from_path(abs_path)
-                    local thumb = generate_thumbnail(abs_path, name)
-                    table.insert(result, {
-                        name = name,
-                        size = entry.size,
-                        url = url,
-                        thumb = thumb
-                    })
-                end
-            end
-        end
-    end
-
-    cached_movies = json_encode(result)
-    cached_count = #result
+    cached_movies = result_json
     return cached_movies
+end
+
+function refresh_movies()
+    cached_movies = nil
+    return get_movies()
 end
 
 local function on_load()
@@ -292,16 +269,12 @@ local function on_unload()
 end
 
 function get_status()
-    local startup = get_startup_location_info()
     return json_encode({
         has_ffmpeg = ffmpeg_bin ~= nil,
         movie_count = cached_count,
-        has_autoplay_patch = has_autoplay_patch(),
-        ftp_serving = true,
-        startup_found = startup.found,
-        startup_raw = startup.raw,
-        startup_is_library = startup.is_library,
-        startup_path = startup.path
+        has_autoplay_flag = has_autoplay_flag(),
+        has_autoplay_patch = has_autoplay_flag(), -- legacy alias for older frontends
+        ftp_serving = true
     })
 end
 
@@ -313,6 +286,7 @@ return {
     on_load = on_load,
     on_unload = on_unload,
     get_movies = get_movies,
+    refresh_movies = refresh_movies,
     get_status = get_status,
     log_message = log_message
 }
