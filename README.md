@@ -16,7 +16,7 @@ cd ~/.local/share/millennium/plugins/startup-movies
 npm install && npm run build
 ```
 
-Requires Millennium v3+.
+Requires [Millennium](https://steambrew.app) v3+.
 
 ## Movies
 
