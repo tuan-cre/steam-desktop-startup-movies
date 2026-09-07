@@ -5,7 +5,7 @@ Millennium plugin that plays a startup movie on Steam launch, like Steam Deck.
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tuan-cre/steam-desktop-startup-movies/master/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/tuan-cre/steam-desktop-startup-movies/master/install.sh | bash
 ```
 
 Or manual: clone to `~/.local/share/millennium/plugins/startup-movies`, `npm install && npm run build`.
