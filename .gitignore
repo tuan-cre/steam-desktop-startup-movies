@@ -7,4 +7,3 @@ dist/
 movies/*
 !movies/.keep
 !movies/blue-archive.webm
-!movies/README.txt
