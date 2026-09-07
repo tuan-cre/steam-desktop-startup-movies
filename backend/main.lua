@@ -270,7 +270,6 @@ end
 function get_status()
     return json_encode({
         has_ffmpeg = ffmpeg_bin ~= nil,
-        movie_count = cached_count,
         has_autoplay_flag = has_autoplay_flag(),
         ftp_serving = true
     })

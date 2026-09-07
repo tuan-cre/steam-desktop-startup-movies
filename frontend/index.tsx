@@ -12,7 +12,6 @@ import {
 import React from "react";
 
 const OVERLAY_ID = "StartupMovieOverlay";
-const PLAYED_KEY = "startup-movies-played-this-session";
 const OBJECT_FIT_KEY = "startup-movies-object-fit";
 const MOVIE_KEY = "startup-movies-selected";
 const TRANSITION_KEY = "startup-movies-transition";
@@ -73,6 +72,21 @@ function formatSize(bytes: number): string {
     if (bytes < 1024) return bytes + " B";
     if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB";
     return (bytes / 1048576).toFixed(1) + " MB";
+}
+
+// Try unmuting after decode when the autoplay flag allows it.
+// Starts muted for stock-policy compatibility; falls back to muted silently.
+function tryUnmute(video: HTMLVideoElement | null) {
+    if (!video) return;
+    try {
+        video.muted = false;
+        const p = video.play();
+        if (p && (p as any).catch) (p as Promise<void>).catch(() => {
+            video.muted = true;
+        });
+    } catch {
+        video.muted = true;
+    }
 }
 
 const overlayStyle: React.CSSProperties = {
@@ -143,16 +157,7 @@ function StartupMovieOverlay() {
 
     const handleVideoReady = React.useCallback(() => {
         setVideoReady(true);
-        // Hybrid: try unmuting after decode if the autoplay flag allows it. Starts muted for stock-policy compatibility.
-        if (_audioEnabled && videoRef.current) {
-            try {
-                videoRef.current.muted = false;
-                const p = videoRef.current.play();
-                if (p && (p as any).catch) (p as Promise<void>).catch(() => {
-                    if (videoRef.current) videoRef.current.muted = true;
-                });
-            } catch {}
-        }
+        if (_audioEnabled) tryUnmute(videoRef.current);
     }, []);
 
     // Hybrid: handle audio toggle while video is playing
@@ -161,15 +166,7 @@ function StartupMovieOverlay() {
         if (!audioEnabled) {
             videoRef.current.muted = true;
         } else if (videoReady) {
-            try {
-                videoRef.current.muted = false;
-                const p = videoRef.current.play();
-                if (p && (p as any).catch) (p as Promise<void>).catch(() => {
-                    if (videoRef.current) videoRef.current.muted = true;
-                });
-            } catch {
-                if (videoRef.current) videoRef.current.muted = true;
-            }
+            tryUnmute(videoRef.current);
         }
     }, [audioEnabled, videoReady, videoUrl]);
 
@@ -251,10 +248,6 @@ async function tryStartupPlayback() {
         }
         (window as any).__showSteamUI?.();
         return;
-    }
-
-    if (!sessionStorage.getItem(PLAYED_KEY)) {
-        sessionStorage.setItem(PLAYED_KEY, "1");
     }
 
     let movie: any;
@@ -371,13 +364,9 @@ function Panel() {
         text: "Startup Location must be Library (Steam → Settings → Interface)",
         color: "#7eb0ff",
     };
-    if (status) {
-        if (!status.ftp_serving) {
-            if (!status.has_python) warnings.push("python3 not found - HTTP server unavailable");
-            if (status.has_python && !status.server_running) warnings.push("HTTP server is not running");
-        }
-        if (!status.has_ffmpeg) warnings.push("ffmpeg not found - thumbnails disabled");
-    }
+    // Note: ftp_serving is always true and the backend sends no python fields,
+    // so the only reachable warning is the ffmpeg one.
+    if (status && !status.has_ffmpeg) warnings.push("ffmpeg not found - thumbnails disabled");
 
     return (
         <>
@@ -390,13 +379,11 @@ function Panel() {
                 </PanelSectionRow>
             </PanelSection>
         )}
-    {startupRequirement && (
         <PanelSection title="Requirement">
             <PanelSectionRow>
                 <div style={{ color: startupRequirement.color, fontSize: "12px", lineHeight: "1.5" }}>{startupRequirement.text}</div>
             </PanelSectionRow>
         </PanelSection>
-        )}
 
         <PanelSection title="Movie">
             {movies.length > 0 ? (
@@ -509,8 +496,6 @@ function Panel() {
         </>
     );
 }
-
-routerHook.addRoute("/startup-movies", Panel);
 
 export default definePlugin(() => ({
     title: "Startup Movies",
