@@ -54,8 +54,7 @@ local _has_autoplay_flag = nil
 local function has_autoplay_flag()
     if _has_autoplay_flag ~= nil then return _has_autoplay_flag end
     -- NOTE: this only observes whether steamwebhelper runs with
-    -- --autoplay-policy (unmuted autoplay available). Recent Steam clients
-    -- ship the flag stock, so "flag present" no longer means "patched".
+    -- --autoplay-policy (unmuted autoplay available, shipped stock by Steam).
     local h = io.popen("ps aux 2>/dev/null | grep -q 'autoplay-policy' && echo yes || echo no")
     if h then
         local r = h:read("*a") or ""
@@ -273,7 +272,6 @@ function get_status()
         has_ffmpeg = ffmpeg_bin ~= nil,
         movie_count = cached_count,
         has_autoplay_flag = has_autoplay_flag(),
-        has_autoplay_patch = has_autoplay_flag(), -- legacy alias for older frontends
         ftp_serving = true
     })
 end

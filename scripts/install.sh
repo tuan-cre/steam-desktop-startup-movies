@@ -19,16 +19,11 @@ while [[ $# -gt 0 ]]; do
         --no-build) NO_BUILD=1; shift ;;
         --release) RELEASE_URL="$2"; shift 2 ;;
         --branch) BRANCH="$2"; shift 2 ;;
-        # Deprecated patch flags: accepted for compatibility, patching is always skipped
-        # (recent Steam ships --autoplay-policy stock).
-        --no-patch|--without-patch) shift ;;
-        --patch|--with-patch) echo "NOTE: --patch is deprecated (Steam ships --autoplay-policy stock now). Ignoring."; shift ;;
         -h|--help)
             echo "Usage: install.sh [--dir <path>] [--no-build] [--release <zip-url>] [--branch <branch>]"
             echo "  --dir      Custom plugin dir (default: \$XDG_DATA_HOME/millennium/plugins/$PLUGIN_NAME)"
             echo "  --no-build Skip npm build if frontend/index.js missing"
             echo "  --release  Install from prebuilt zip (no git/node)"
-            echo "  --no-patch Accepted for compatibility (patching is deprecated, always skipped)"
             exit 0
             ;;
         *) echo "Unknown arg: $1" >&2; exit 1 ;;
@@ -97,15 +92,10 @@ else
     fi
 fi
 
-# --- Millennium autoplay patch (DEPRECATED: Steam ships --autoplay-policy stock) ---
-echo ""
-echo "Skipping Millennium patch (deprecated - not needed on recent Steam)."
-
 echo ""
 echo "=== Done ==="
 echo "Plugin: $INSTALL_DIR"
-echo "Movies: $INSTALL_DIR/movies/ (.webm/.mp4)"
+echo "Movies: $INSTALL_DIR/movies/ (video files)"
 command -v ffmpeg >/dev/null 2>&1 && echo "ffmpeg: $(which ffmpeg) (thumbnails on)" || echo "ffmpeg: not found (optional)"
-echo "Millennium: unmuted autoplay comes stock with recent Steam (no patch needed)"
 echo ""
-echo "Restart Steam to apply. Verify: grep startup-movies ~/.local/share/Steam/logs/millennium.log | tail -5"
+echo "Restart Steam to apply."

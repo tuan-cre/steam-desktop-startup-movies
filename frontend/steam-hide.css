@@ -3,7 +3,7 @@ html, body, body > * {
     pointer-events: none !important;
 }
 
-/* Hybrid: keep overlay visible despite parent opacity:0 - matches patched Millennium's millennium-override */
+/* Keep overlay visible despite parent opacity:0 */
 #StartupMovieOverlay {
     opacity: 1 !important;
     pointer-events: auto !important;
