@@ -456,12 +456,12 @@ function Panel() {
             <PanelSectionRow>
                 <div style={{ display: "flex", gap: "8px", width: "100%" }}>
                     <div style={{ flex: 1 }}>
-                        <DialogButton onClick={previewSelected} style={{ width: "100%" }}>
+                        <DialogButton onClick={previewSelected} style={{ width: "100%", borderRadius: "4px" }}>
                             Preview
                         </DialogButton>
                     </div>
                     <div style={{ flex: 1 }}>
-                        <DialogButton onClick={handleRefresh} disabled={refreshing} style={{ width: "100%" }}>
+                        <DialogButton onClick={handleRefresh} disabled={refreshing} style={{ width: "100%", borderRadius: "4px" }}>
                             {refreshing ? "Refreshing..." : "Refresh"}
                         </DialogButton>
                     </div>
