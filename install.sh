@@ -2,7 +2,7 @@
 # One-liner installer for steam-desktop-startup-movies
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/tuan-cre/steam-desktop-startup-movies/master/install.sh | bash
-#   bash install.sh [--dir <path>] [--no-build] [--release <zip-url>]
+#   bash install.sh [--dir <path>] [--rebuild] [--release <zip-url>]
 set -euo pipefail
 
 REPO="https://github.com/tuan-cre/steam-desktop-startup-movies.git"
@@ -10,19 +10,20 @@ BRANCH="master"
 PLUGIN_NAME="startup-movies"
 
 INSTALL_DIR=""
-NO_BUILD=0
+REBUILD=0
 RELEASE_URL=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dir) INSTALL_DIR="$2"; shift 2 ;;
-        --no-build) NO_BUILD=1; shift ;;
+        --rebuild) REBUILD=1; shift ;;
+        --no-build) REBUILD=0; shift ;; # deprecated: prebuilt is used by default now
         --release) RELEASE_URL="$2"; shift 2 ;;
         --branch) BRANCH="$2"; shift 2 ;;
         -h|--help)
-            echo "Usage: install.sh [--dir <path>] [--no-build] [--release <zip-url>] [--branch <branch>]"
+            echo "Usage: install.sh [--dir <path>] [--rebuild] [--release <zip-url>] [--branch <branch>]"
             echo "  --dir      Custom plugin dir (default: \$XDG_DATA_HOME/millennium/plugins/$PLUGIN_NAME)"
-            echo "  --no-build Skip the npm build step"
+            echo "  --rebuild  Force npm rebuild (default: use shipped .millennium/Dist/index.js)"
             echo "  --release  Install from prebuilt zip (no git/node)"
             exit 0
             ;;
@@ -72,22 +73,21 @@ else
         git clone --depth 1 --branch "$BRANCH" "$REPO" "$INSTALL_DIR"
     fi
     mkdir -p "$INSTALL_DIR/movies/thumbs"
-    need_build=0
-    if [[ ! -f "$INSTALL_DIR/frontend/index.js" ]]; then
-        need_build=1; echo "frontend/index.js missing - build required"
-    elif [[ "$INSTALL_DIR/frontend/index.tsx" -nt "$INSTALL_DIR/frontend/index.js" ]]; then
-        need_build=1; echo "frontend/index.tsx newer - rebuild"
-    fi
-    if [[ $need_build -eq 1 && $NO_BUILD -eq 0 ]]; then
+    # The repo ships a working prebuilt (.millennium/Dist/index.js is tracked
+    # in git). Never build on mtime heuristics: fresh clones get arbitrary
+    # timestamps that falsely trip -nt checks. --rebuild forces a build.
+    if [[ $REBUILD -eq 1 ]]; then
         if command -v npm >/dev/null 2>&1; then
-            echo "Building frontend (npm run build) ..."
+            echo "Rebuilding frontend (npm run build) ..."
             (cd "$INSTALL_DIR" && npm install --silent 2>&1 | tail -5; npm run build 2>&1 | tail -20)
-            echo "Build done: $(wc -c < "$INSTALL_DIR/frontend/index.js") bytes"
+            echo "Build done: $(wc -c < "$INSTALL_DIR/.millennium/Dist/index.js") bytes"
         else
-            echo "WARN: npm missing - run: (cd \"$INSTALL_DIR\" && npm install && npm run build)"
+            echo "WARN: npm missing - cannot rebuild" >&2; exit 1
         fi
+    elif [[ ! -f "$INSTALL_DIR/.millennium/Dist/index.js" ]]; then
+        echo "WARN: .millennium/Dist/index.js missing - re-run with --rebuild (needs npm)" >&2
     else
-        echo "Frontend built, skip build"
+        echo "Frontend prebuilt, skip build (use --rebuild to force)"
     fi
 fi
 
