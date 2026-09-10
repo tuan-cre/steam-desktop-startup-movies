@@ -48,7 +48,7 @@ Lessons kept: `fs.exists` pre-filters before any probe, `utils.base64_encode`
 / `http` builtins over shell-outs, `pcall` the startup path.
 
 ## Facts that may have shifted
-- Master is now v1.2.0: source-of-truth is `frontend/index.tsx` (ttc
+- Master is now v1.3.0: source-of-truth is `frontend/index.tsx` (ttc
   compiles it to `.millennium/Dist/index.js` at build; both the Dist
   output and the `frontend/` copy are committed so installs need no
   build), multi-format support, no Startup Location detection,
