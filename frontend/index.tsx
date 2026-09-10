@@ -376,6 +376,23 @@ function Panel() {
         if (url) playMovie(url);
     };
 
+    // Trial: force the embedded data-URL path (get_movie_data) even on
+    // Linux, where resolvePlayUrl would take the FTP url. Logs byte size
+    // and fetch time to the backend log for FTP-vs-data comparison.
+    const previewDataUrl = async () => {
+        const m = movies.find((mm: any) => mm.name === selected) || movies[0];
+        if (!m) return;
+        const t0 = Date.now();
+        const d: any = await callBackend("get_movie_data", { name: m.name });
+        const ms = Date.now() - t0;
+        if (typeof d === "string" && d.startsWith("data:")) {
+            logToBackend(`data-url trial: ${m.name} chars=${d.length} ms=${ms}`);
+            playMovie(d);
+        } else {
+            logToBackend(`data-url trial FAILED: ${m.name} ms=${ms}`);
+        }
+    };
+
     const handleRefresh = async () => {
         setRefreshing(true);
         try {
@@ -458,6 +475,11 @@ function Panel() {
                     <div style={{ flex: 1 }}>
                         <DialogButton onClick={previewSelected} style={{ width: "100%", borderRadius: "4px" }}>
                             Preview
+                        </DialogButton>
+                    </div>
+                    <div style={{ flex: 1 }}>
+                        <DialogButton onClick={previewDataUrl} style={{ width: "100%", borderRadius: "4px" }}>
+                            Data URL
                         </DialogButton>
                     </div>
                     <div style={{ flex: 1 }}>
