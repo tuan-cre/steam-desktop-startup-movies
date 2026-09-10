@@ -41,8 +41,8 @@ if ([string]::IsNullOrWhiteSpace($Dir)) {
 Write-Host "=== Startup Movies installer (Windows) ==="
 Write-Host "Target: $Dir"
 
-$millenniumDir = Join-Path (Split-Path $Dir -Parent | Split-Path -Parent) ""
-if ((-not (Test-Path "$Env:ProgramFiles(x86)\Steam\millennium")) -and (-not (Test-Path "$Env:ProgramFiles\Steam\millennium"))) {
+$millenniumMissing = (-not (Test-Path "${Env:ProgramFiles(x86)}\Steam\millennium")) -and (-not (Test-Path "$Env:ProgramFiles\Steam\millennium"))
+if ($millenniumMissing) {
     Write-Warning "Millennium not found (<Steam>\millennium). Install first: https://steambrew.app/"
 }
 
