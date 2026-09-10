@@ -48,8 +48,10 @@ Lessons kept: `fs.exists` pre-filters before any probe, `utils.base64_encode`
 / `http` builtins over shell-outs, `pcall` the startup path.
 
 ## Facts that may have shifted
-- Master is now v1.1.1: source-of-truth is `frontend/index.tsx` (starlight
-  compiles it at load), multi-format support, no Startup Location detection,
+- Master is now v1.2.0: source-of-truth is `frontend/index.tsx` (ttc
+  compiles it to `.millennium/Dist/index.js` at build; both the Dist
+  output and the `frontend/` copy are committed so installs need no
+  build), multi-format support, no Startup Location detection,
   no Millennium patch needed (Steam ships `--autoplay-policy` stock).
 - Correct Windows install path is
   `C:\Program Files (x86)\Steam\millennium\plugins\startup-movies`

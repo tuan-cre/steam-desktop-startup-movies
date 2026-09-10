@@ -5,13 +5,11 @@
 .DESCRIPTION
   Mirrors install.sh: clones/pulls the plugin into
   C:\Program Files (x86)\Steam\millennium\plugins\startup-movies,
-  ensures movies/thumbs exist, and builds the frontend if needed.
+  ensures movies/thumbs exist. Uses the shipped prebuilt frontend.
 .PARAMETER Dir
   Custom plugin dir (default: "$Env:ProgramFiles(x86)\Steam\millennium\plugins\startup-movies").
 .PARAMETER Rebuild
-  Force npm rebuild (default: use shipped frontend/index.js).
-.PARAMETER NoBuild
-  Deprecated, kept for compat (skip-by-default now).
+  Force npm rebuild (default: use shipped .millennium/Dist/index.js).
 .PARAMETER Release
   Install from a prebuilt zip URL (no git/node needed).
 .PARAMETER Branch
@@ -23,7 +21,6 @@
 param(
     [string]$Dir = "",
     [switch]$Rebuild,
-    [switch]$NoBuild,
     [string]$Release = "",
     [string]$Branch = "master"
 )
@@ -90,7 +87,7 @@ if ($Release -ne "") {
     }
     New-Item -ItemType Directory -Force -Path (Join-Path $Dir "movies\thumbs") | Out-Null
 
-    $indexJs = Join-Path $Dir "frontend\index.js"
+    $indexJs = Join-Path $Dir ".millennium\Dist\index.js"
     if ($Rebuild) {
         if (Get-Command npm -ErrorAction SilentlyContinue) {
             Write-Host "Rebuilding frontend (npm run build) ..."
@@ -104,7 +101,7 @@ if ($Release -ne "") {
             throw "npm missing - cannot rebuild"
         }
     } elseif (-not (Test-Path $indexJs)) {
-        Write-Warning "frontend/index.js missing - re-run with -Rebuild (needs npm)"
+        Write-Warning ".millennium/Dist/index.js missing - re-run with -Rebuild (needs npm)"
     } else {
         Write-Host "Frontend prebuilt, skip build (use -Rebuild to force)"
     }

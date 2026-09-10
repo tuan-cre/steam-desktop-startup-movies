@@ -1,5 +1,4 @@
 node_modules/
-millennium/
 .millennium/*
 !.millennium/Dist
 .millennium/Dist/*

@@ -29,8 +29,9 @@ This note exists so future edits don't silently break it.
   `install.ps1` is its Windows mirror — keep flags
   (`--dir`, `--rebuild`, `--release`, `--branch`) and layout guarantees
   (`movies/thumbs`) in lockstep.
-- `package.json` `postbuild` still uses POSIX `cp -r`; breaks Windows
-  `npm run build`. Unfixed — replace with a node one-liner when touched.
+- `package.json` `postbuild` is a node one-liner (no POSIX tools), so
+  `npm run build` works on Windows too. Only the ttc compiler + node
+  are required for `--rebuild`.
 
 ## Deliberately different (not tech debt)
 - Linux streams via FTP (unbounded size, byte-ranges, tiny IPC).

@@ -75,8 +75,8 @@ function formatSize(bytes: number): string {
     return (bytes / 1048576).toFixed(1) + " MB";
 }
 
-// Try unmuting after decode when the autoplay flag allows it.
-// Starts muted for stock-policy compatibility; falls back to muted silently.
+// Starts muted for stock-policy compatibility; unmutes opportunistically
+// after decode. Falls back to muted silently where autoplay blocks it.
 function tryUnmute(video: HTMLVideoElement | null) {
     if (!video) return;
     try {
@@ -101,7 +101,6 @@ const overlayStyle: React.CSSProperties = {
     alignItems: "center",
     justifyContent: "center",
     cursor: "pointer",
-    transition: "opacity 0.4s ease",
 };
 
 function StartupMovieOverlay() {
@@ -353,22 +352,45 @@ function Panel() {
 
     const selectedMovie = movies.find((m: any) => m.name === selected);
     const [thumbData, setThumbData] = React.useState<string | null>(null);
+    const [thumbPending, setThumbPending] = React.useState(false);
+    // Backend generates missing thumbnails asynchronously (ffmpeg runs in
+    // the background during the movie scan), so the list may not carry one
+    // yet. Attempts per movie name; survives rescan-triggered re-renders.
+    const thumbAttempts = React.useRef<Record<string, number>>({});
 
     // Linux thumbs arrive as URLs in the list; Windows thumbs resolve on
     // demand as embedded data (the list only carries has_thumb).
     React.useEffect(() => {
         let cancelled = false;
+        let timer: ReturnType<typeof setTimeout> | null = null;
         setThumbData(null);
+        setThumbPending(false);
         if (selectedMovie?.thumb) {
             setThumbData(selectedMovie.thumb);
         } else if (selectedMovie?.has_thumb) {
+            setThumbPending(true);
             callBackend("get_thumb_data", { name: selectedMovie.name }).then((d: any) => {
-                if (!cancelled && typeof d === "string" && d.startsWith("data:")) setThumbData(d);
+                if (cancelled) return;
+                if (typeof d === "string" && d.startsWith("data:")) setThumbData(d);
+                setThumbPending(false);
             });
+        } else if (selectedMovie && status?.has_ffmpeg) {
+            const seen = thumbAttempts.current[selectedMovie.name] ?? 0;
+            if (seen < 4) {
+                setThumbPending(true);
+                timer = setTimeout(async () => {
+                    thumbAttempts.current[selectedMovie.name] = seen + 1;
+                    if (!cancelled) setMovies(await loadMovies(true));
+                }, 2000);
+            }
         }
-        return () => { cancelled = true; };
-    }, [selected, movies]);
+        return () => { cancelled = true; if (timer) clearTimeout(timer); };
+    }, [selected, movies, status]);
     const thumbUrl = thumbData;
+    let thumbNote = "No thumbnail";
+    if (!status) thumbNote = "Loading…";
+    else if (!status.has_ffmpeg) thumbNote = "No thumbnail — install ffmpeg";
+    else if (thumbPending) thumbNote = "Generating thumbnail…";
 
     const previewSelected = async () => {
         const m = movies.find((mm: any) => mm.name === selected) || movies[0];
@@ -379,6 +401,7 @@ function Panel() {
     const handleRefresh = async () => {
         setRefreshing(true);
         try {
+            thumbAttempts.current = {};
             setMovies(await loadMovies(true));
             setStatus(await callBackend("get_status"));
         } finally {
@@ -434,20 +457,27 @@ function Panel() {
             </PanelSectionRow>
             )}
 
-            {thumbUrl && (
+            {/* Thumbnail frame always renders while a movie is selected so the
+                layout never jumps; status text fills in when no image yet. */}
+            {movies.length > 0 && (
                 <PanelSectionRow>
-                    <div style={{ display: "flex", justifyContent: "center", width: "100%" }}>
-                        <img
-                            src={thumbUrl}
-                            style={{
-                                width: "100%",
-                                aspectRatio: "16 / 9",
-                                objectFit: "contain",
-                                borderRadius: "4px",
-                                display: "block",
-                                background: "#000"
-                            }}
-                        />
+                    <div style={{ width: "100%", aspectRatio: "16 / 9", borderRadius: "4px", background: "#000", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        {thumbUrl ? (
+                            <img
+                                src={thumbUrl}
+                                style={{
+                                    width: "100%",
+                                    height: "100%",
+                                    objectFit: "contain",
+                                    borderRadius: "4px",
+                                    display: "block"
+                                }}
+                            />
+                        ) : (
+                            <div style={{ color: "#888", fontSize: "12px", padding: "0 12px", textAlign: "center" }}>
+                                {thumbNote}
+                            </div>
+                        )}
                     </div>
                 </PanelSectionRow>
             )}
