@@ -7,4 +7,4 @@ dist/
 *.log
 movies/*
 !movies/.keep
-!movies/blue-archive.webm
+!movies/Hades.webm
