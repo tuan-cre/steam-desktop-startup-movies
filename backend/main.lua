@@ -2,22 +2,45 @@ local millennium = require("millennium")
 local fs = require("fs")
 local logger = require("logger")
 
+local IS_WINDOWS = package.config:sub(1, 1) == "\\"
+
 local movies_path = nil
 local thumbs_path = nil
 local cached_movies = nil
 local cached_count = 0
 local ffmpeg_bin = nil
 
--- Millennium ftp VFS: https://millennium.ftp/<absolute_path> is intercepted by
--- network_hook_ctl::vfs_request_handler (src/engine/http_hooks.cc:138) and
--- served via Fetch.fulfillRequest with proper mime. No python http.server needed.
+-- Serving model.
+-- Linux: Millennium ftp VFS, https://millennium.ftp/<absolute_path>,
+-- intercepted by network_hook_ctl::vfs_request_handler
+-- (Millennium src/engine/http_hooks.cc:135). No local server needed.
+-- Windows: the VFS handler reads files with std::ifstream in text mode
+-- (http_hooks.cc:173) and has no video MIME types at all
+-- (src/include/millennium/mime_types.h:30 — CSS/JS/fonts/images/HTML only).
+-- Text-mode reads stop at the first 0x1A byte, which every WebM starts with
+-- (EBML magic), so video comes back empty -> MEDIA_ERR_SRC_NOT_SUPPORTED
+-- (verified live: FTP playback flashes black 0.1s then dismisses).
+-- Windows therefore embeds movies as base64 data URLs (read + encoded
+-- in-process: zero spawned consoles, zero python dependency, zero ports).
+-- One movie is ever embedded at a time (the one about to play), so peak
+-- cost is ~1.33x a single file. Files over DATA_MAX_BYTES are refused.
 local FTP_BASE = "https://millennium.ftp"
 
-local function ftp_url_from_path(abs_path)
-    -- mirrors utils::url::encode_url + get_url_from_path (src/include/millennium/url_parser.h:79)
-    -- On Linux: FTP_BASE + encode(path without leading "/")
-    local p = abs_path
-    if p:sub(1,1) == "/" then p = p:sub(2) end
+local DATA_MAX_BYTES = 64 * 1024 * 1024
+
+local DATA_VIDEO_MIME = {
+    [".webm"] = "video/webm",
+    [".mp4"] = "video/mp4",
+    [".m4v"] = "video/mp4",
+    [".mov"] = "video/quicktime",
+    [".mkv"] = "video/x-matroska",
+    [".ogv"] = "video/ogg",
+    [".ogg"] = "video/ogg",
+}
+
+local function url_encode_ftp(s)
+    -- mirrors utils::url::encode_url (src/include/millennium/url_parser.h:39):
+    -- alnum + - _ . ~ / verbatim, space -> +, rest %XX
     local function enc_char(c)
         local b = string.byte(c)
         if (b >= 48 and b <= 57) or (b >= 65 and b <= 90) or (b >= 97 and b <= 122)
@@ -29,46 +52,15 @@ local function ftp_url_from_path(abs_path)
             return string.format("%%%02X", b)
         end
     end
-    local enc = p:gsub("([^%w%-%_%.%~%/ ])", enc_char)
-    return FTP_BASE .. "/" .. enc
+    return (s:gsub("([^%w%-%_%.%~%/ ])", enc_char))
 end
 
-local function find_ffmpeg()
-    if ffmpeg_bin then return ffmpeg_bin end
-    local handle = io.popen("which ffmpeg 2>/dev/null")
-    if handle then
-        local result = handle:read("*a")
-        handle:close()
-        result = result:match("^%s*(.-)%s*$")
-        if result and result ~= "" then
-            ffmpeg_bin = result
-            logger:info("Found ffmpeg: " .. ffmpeg_bin)
-            return ffmpeg_bin
-        end
-    end
-    logger:warn("ffmpeg not found on PATH - thumbnail generation disabled")
-    return nil
-end
-
-local _has_autoplay_flag = nil
-local function has_autoplay_flag()
-    if _has_autoplay_flag ~= nil then return _has_autoplay_flag end
-    -- NOTE: this only observes whether steamwebhelper runs with
-    -- --autoplay-policy (unmuted autoplay available, shipped stock by Steam).
-    local h = io.popen("ps aux 2>/dev/null | grep -q 'autoplay-policy' && echo yes || echo no")
-    if h then
-        local r = h:read("*a") or ""
-        h:close()
-        _has_autoplay_flag = r:find("yes") ~= nil
-        if _has_autoplay_flag then
-            logger:info("Observed --autoplay-policy in steamwebhelper cmdline (unmuted autoplay available)")
-        else
-            logger:info("No --autoplay-policy flag - using muted-first hybrid fallback")
-        end
-        return _has_autoplay_flag
-    end
-    _has_autoplay_flag = false
-    return false
+local function ftp_url_from_path(abs_path)
+    -- mirrors utils::url::encode_url + get_url_from_path (src/include/millennium/url_parser.h:79)
+    -- On Linux: FTP_BASE + encode(path without leading "/")
+    local p = abs_path
+    if p:sub(1, 1) == "/" then p = p:sub(2) end
+    return FTP_BASE .. "/" .. url_encode_ftp(p)
 end
 
 -- Video extensions Chromium (steamwebhelper) can actually decode.
@@ -88,6 +80,101 @@ local function is_video_file(name)
     if not ext or ext == "" then return false, nil end
     ext = ext:lower()
     return VIDEO_EXTS[ext] == true, ext
+end
+
+local function trim(s)
+    return (s or ""):match("^%s*(.-)%s*$")
+end
+
+local function base64_of_file(abs_path)
+    local f = io.open(abs_path, "rb")
+    if not f then return nil end
+    local bytes = f:read("*a") or ""
+    f:close()
+    if #bytes == 0 or #bytes > DATA_MAX_BYTES then
+        return nil, #bytes
+    end
+    local has_utils, utils = pcall(require, "utils")
+    if not has_utils or not utils or not utils.base64_encode then
+        return nil, #bytes
+    end
+    local b64 = utils.base64_encode(bytes)
+    if not b64 or b64 == "" then return nil, #bytes end
+    return b64, #bytes
+end
+
+local function find_ffmpeg()
+    if ffmpeg_bin then return ffmpeg_bin end
+    if IS_WINDOWS then
+        -- fs.exists checks first: `where` flashes a console, so it stays
+        -- the fallback. (Thumbnail generation is the only remaining spawn,
+        -- and only fires while a thumb is missing.)
+        local localapp = os.getenv("LOCALAPPDATA") or ""
+        local pfiles = os.getenv("ProgramFiles") or "C:\\Program Files"
+        local abs = {}
+        if localapp ~= "" then
+            abs[#abs + 1] = localapp .. "\\Microsoft\\WinGet\\Links\\ffmpeg.exe"
+        end
+        abs[#abs + 1] = pfiles .. "\\ffmpeg\\bin\\ffmpeg.exe"
+        abs[#abs + 1] = "C:\\ffmpeg\\bin\\ffmpeg.exe"
+        for _, exe in ipairs(abs) do
+            if fs.exists(exe) then
+                ffmpeg_bin = exe
+                logger:info("Found ffmpeg: " .. ffmpeg_bin)
+                return ffmpeg_bin
+            end
+        end
+    end
+    local probe
+    if IS_WINDOWS then
+        probe = "where ffmpeg 2>NUL"
+    else
+        probe = "which ffmpeg 2>/dev/null"
+    end
+    local handle = io.popen(probe)
+    if handle then
+        local result = trim(handle:read("*a") or "")
+        handle:close()
+        -- `where` can list several lines; take the first .exe that exists.
+        local first = result:match("([^\r\n]+)")
+        if first and first ~= "" then
+            ffmpeg_bin = trim(first)
+            logger:info("Found ffmpeg: " .. ffmpeg_bin)
+            return ffmpeg_bin
+        end
+    end
+    logger:warn("ffmpeg not found on PATH - thumbnail generation disabled")
+    return nil
+end
+
+local _has_autoplay_flag = nil
+local function has_autoplay_flag()
+    if _has_autoplay_flag ~= nil then return _has_autoplay_flag end
+    -- NOTE: this only observes whether steamwebhelper runs with
+    -- --autoplay-policy (unmuted autoplay available, shipped stock by Steam).
+    -- The result only feeds a log line and an undisplayed status field —
+    -- playback unmutes opportunistically regardless — so on Windows we skip
+    -- the tasklist probe entirely: it costs a console flash every time the
+    -- settings panel loads get_status, for zero visible benefit.
+    if IS_WINDOWS then
+        _has_autoplay_flag = false
+        logger:info("Autoplay-flag probe skipped on Windows (muted-first hybrid fallback)")
+        return false
+    end
+    local h = io.popen("ps aux 2>/dev/null | grep -q 'autoplay-policy' && echo yes || echo no")
+    if h then
+        local r = h:read("*a") or ""
+        h:close()
+        _has_autoplay_flag = r:find("yes") ~= nil
+        if _has_autoplay_flag then
+            logger:info("Observed --autoplay-policy in steamwebhelper cmdline (unmuted autoplay available)")
+        else
+            logger:info("No --autoplay-policy flag - using muted-first hybrid fallback")
+        end
+        return _has_autoplay_flag
+    end
+    _has_autoplay_flag = false
+    return false
 end
 
 local function ensure_movies_dir()
@@ -111,43 +198,60 @@ local function ensure_movies_dir()
     movies_path = path
 
     local thumbs = fs.join(path, "thumbs")
-    os.execute('mkdir -p "' .. thumbs .. '" 2>/dev/null')
+    local ok, err = fs.create_directories(thumbs)
     if fs.exists(thumbs) then
         thumbs_path = thumbs
         logger:info("Thumbnails directory: " .. thumbs)
     else
-        logger:warn("Could not create thumbnails directory: " .. thumbs)
+        logger:warn("Could not create thumbnails directory: " .. thumbs .. " (" .. tostring(err) .. ")")
     end
 
     return movies_path
 end
 
+local function thumb_name_for(movie_name)
+    local movie_ext = movie_name:match("%.([^%.]+)$") or ""
+    -- ext has NO dot here, so drop #ext + 1 (dot) chars: sub end = -(#ext + 2)
+    local base = movie_name:sub(1, -(#movie_ext + 2))
+    return base .. ".jpg"
+end
+
 local function generate_thumbnail(movie_path, movie_name)
     if not thumbs_path or not ffmpeg_bin then return nil end
 
-    local ok, thumb_url = pcall(function()
-        local movie_ext = movie_name:match("%.([^%.]+)$") or ""
-        -- ext has NO dot here, so drop #ext + 1 (dot) chars: sub end = -(#ext + 2)
-        local base = movie_name:sub(1, -(#movie_ext + 2))
-        local thumb_name = base .. ".jpg"
+    local ok, thumb_url_or_nil = pcall(function()
+        local thumb_name = thumb_name_for(movie_name)
         local thumb_path = fs.join(thumbs_path, thumb_name)
 
         if not fs.exists(thumb_path) then
-            local cmd = string.format(
-                '"%s" -y -i "%s" -ss 00:00:01 -vframes 1 -q:v 2 "%s" 2>/dev/null &',
-                ffmpeg_bin, movie_path, thumb_path
-            )
+            local cmd
+            if IS_WINDOWS then
+                cmd = string.format(
+                    'start "" /B "%s" -y -i "%s" -ss 00:00:01 -vframes 1 -q:v 2 "%s" > NUL 2>&1',
+                    ffmpeg_bin, movie_path, thumb_path
+                )
+            else
+                cmd = string.format(
+                    '"%s" -y -i "%s" -ss 00:00:01 -vframes 1 -q:v 2 "%s" 2>/dev/null &',
+                    ffmpeg_bin, movie_path, thumb_path
+                )
+            end
             os.execute(cmd)
             return nil
         end
 
+        if IS_WINDOWS then
+            -- List carries existence only; bytes resolve on demand via
+            -- get_thumb_data (see generate_thumbnail's true below).
+            return true -- exists; frontend fetches bytes via get_thumb_data
+        end
         return ftp_url_from_path(thumb_path)
     end)
     if not ok then
-        logger:warn("Thumbnail failed for '" .. tostring(movie_name) .. "': " .. tostring(thumb_url))
+        logger:warn("Thumbnail failed for '" .. tostring(movie_name) .. "': " .. tostring(thumb_url_or_nil))
         return nil
     end
-    return thumb_url
+    return thumb_url_or_nil
 end
 
 function json_encode(obj)
@@ -180,6 +284,22 @@ function json_encode(obj)
     end
 end
 
+-- Reject anything but a bare filename (no traversal).
+local function clean_name(arg)
+    local name = nil
+    if type(arg) == "string" then
+        name = arg
+    elseif type(arg) == "table" then
+        name = arg.name
+    end
+    if not name or name == "" then return nil end
+    if name:find("[/\\]") or name:find("%.%.") then
+        logger:warn("rejected bad name '" .. tostring(name) .. "'")
+        return nil
+    end
+    return name
+end
+
 function get_movies()
     if cached_movies then return cached_movies end
 
@@ -209,15 +329,21 @@ function get_movies()
                         local base = name:sub(1, -(#ext + 1)):lower()
                         if not seen[base] then
                             seen[base] = true
-                            local abs_path = fs.join(path, name)
-                            local url = ftp_url_from_path(abs_path)
-                            local thumb = generate_thumbnail(abs_path, name)
-                            table.insert(result, {
+                            local item = {
                                 name = name,
                                 size = entry.size or 0,
-                                url = url,
-                                thumb = thumb
-                            })
+                            }
+                            if IS_WINDOWS then
+                                -- Windows: URLs resolve on demand via
+                                -- get_movie_data / get_thumb_data (embedded
+                                -- data). Nothing to spawn or serve here.
+                                item.has_thumb = generate_thumbnail(fs.join(path, name), name) ~= nil
+                            else
+                                local abs_path = fs.join(path, name)
+                                item.url = ftp_url_from_path(abs_path)
+                                item.thumb = generate_thumbnail(abs_path, name)
+                            end
+                            table.insert(result, item)
                         end
                     else
                         skipped = skipped + 1
@@ -250,15 +376,71 @@ function refresh_movies()
     return get_movies()
 end
 
+-- Windows: embed one movie as a data URL (the one about to play).
+-- Single-file weight only; oversized files are refused.
+function get_movie_data(arg)
+    local name = clean_name(arg)
+    if not name then return nil end
+    local ok, url = pcall(function()
+        local path = ensure_movies_dir()
+        if not path then return nil end
+        local is_video, ext = is_video_file(name)
+        if not is_video then return nil end
+        local abs = fs.join(path, name)
+        if not fs.exists(abs) then return nil end
+        local b64, size = base64_of_file(abs)
+        if not b64 then
+            logger:warn("get_movie_data: '" .. name .. "' unreadable or size " .. tostring(size) .. " out of range")
+            return nil
+        end
+        return "data:" .. (DATA_VIDEO_MIME[ext] or "video/webm") .. ";base64," .. b64
+    end)
+    if not ok then
+        logger:warn("get_movie_data failed: " .. tostring(url))
+        return nil
+    end
+    return url
+end
+
+-- Windows: embed one thumbnail as a data URL (tiny jpg).
+function get_thumb_data(arg)
+    local name = clean_name(arg)
+    if not name then return nil end
+    local ok, url = pcall(function()
+        ensure_movies_dir()
+        if not thumbs_path then return nil end
+        local is_video = is_video_file(name)
+        if not is_video then return nil end
+        local abs = fs.join(thumbs_path, thumb_name_for(name))
+        if not fs.exists(abs) then return nil end
+        local b64, size = base64_of_file(abs)
+        if not b64 then return nil end
+        return "data:image/jpeg;base64," .. b64
+    end)
+    if not ok then
+        logger:warn("get_thumb_data failed: " .. tostring(url))
+        return nil
+    end
+    return url
+end
+
 local function on_load()
-    logger:info("Startup Movies plugin loaded (dev/ftp VFS - no python server)")
+    if IS_WINDOWS then
+        logger:info("Startup Movies plugin loaded (windows/data embedded, zero processes)")
+    else
+        logger:info("Startup Movies plugin loaded (dev/ftp VFS - no python server)")
+    end
 
     millennium.add_browser_css("frontend/steam-hide.css")
     millennium.add_browser_js("frontend/steam-hide.js")
 
     find_ffmpeg()
     get_movies()
-    logger:info("Found " .. cached_count .. " movie files (served via https://millennium.ftp)")
+    if IS_WINDOWS then
+        logger:info("Found " .. cached_count .. " movie files (embedded data URLs)")
+    else
+        logger:info("Found " .. cached_count .. " movie files (served via https://millennium.ftp)")
+    end
 
     millennium.ready()
 end
@@ -271,7 +453,9 @@ function get_status()
     return json_encode({
         has_ffmpeg = ffmpeg_bin ~= nil,
         has_autoplay_flag = has_autoplay_flag(),
-        ftp_serving = true
+        ftp_serving = not IS_WINDOWS,
+        data_serving = IS_WINDOWS,
+        is_windows = IS_WINDOWS
     })
 end
 
@@ -285,5 +469,7 @@ return {
     get_movies = get_movies,
     refresh_movies = refresh_movies,
     get_status = get_status,
-    log_message = log_message
+    log_message = log_message,
+    get_movie_data = get_movie_data,
+    get_thumb_data = get_thumb_data
 }

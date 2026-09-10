@@ -238,6 +238,17 @@ function playMovie(url: string) {
     else _pendingPlayUrl = url;
 }
 
+// Windows serves embedded data (no movie.url in the list): fetch the
+// selected file's bytes on demand. Linux URLs come straight from FTP.
+async function resolvePlayUrl(movie: any): Promise<string | null> {
+    if (movie?.url) return movie.url;
+    if (movie?.name) {
+        const d: any = await callBackend("get_movie_data", { name: movie.name });
+        if (typeof d === "string" && d.startsWith("data:")) return d;
+    }
+    return null;
+}
+
 async function tryStartupPlayback() {
     const movies = await loadMovies();
     if (!movies.length) {
@@ -263,6 +274,14 @@ async function tryStartupPlayback() {
     }
     if (movie?.url) {
         playMovie(movie.url);
+    } else if (movie?.name) {
+        const url = await resolvePlayUrl(movie);
+        if (url) playMovie(url);
+        else {
+            if (_setBlackScreen) _setBlackScreen(false);
+            else _pendingNoMovies = true;
+            (window as any).__showSteamUI?.();
+        }
     } else {
         if (_setBlackScreen) _setBlackScreen(false);
         else _pendingNoMovies = true;
@@ -339,11 +358,28 @@ function Panel() {
     };
 
     const selectedMovie = movies.find((m: any) => m.name === selected);
-    const thumbUrl = selectedMovie?.thumb || null;
+    const [thumbData, setThumbData] = React.useState<string | null>(null);
 
-    const previewSelected = () => {
+    // Linux thumbs arrive as URLs in the list; Windows thumbs resolve on
+    // demand as embedded data (the list only carries has_thumb).
+    React.useEffect(() => {
+        let cancelled = false;
+        setThumbData(null);
+        if (selectedMovie?.thumb) {
+            setThumbData(selectedMovie.thumb);
+        } else if (selectedMovie?.has_thumb) {
+            callBackend("get_thumb_data", { name: selectedMovie.name }).then((d: any) => {
+                if (!cancelled && typeof d === "string" && d.startsWith("data:")) setThumbData(d);
+            });
+        }
+        return () => { cancelled = true; };
+    }, [selected, movies]);
+    const thumbUrl = thumbData;
+
+    const previewSelected = async () => {
         const m = movies.find((mm: any) => mm.name === selected) || movies[0];
-        if (m?.url) playMovie(m.url);
+        const url = m ? await resolvePlayUrl(m) : null;
+        if (url) playMovie(url);
     };
 
     const handleRefresh = async () => {
@@ -364,8 +400,7 @@ function Panel() {
         text: "Startup Location must be Library (Steam → Settings → Interface)",
         color: "#7eb0ff",
     };
-    // Note: ftp_serving is always true and the backend sends no python fields,
-    // so the only reachable warning is the ffmpeg one.
+    // The only reachable warning is the ffmpeg one (has_ffmpeg false).
     if (status && !status.has_ffmpeg) warnings.push("ffmpeg not found - thumbnails disabled");
 
     return (
