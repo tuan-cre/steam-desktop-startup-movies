@@ -13,6 +13,12 @@ curl -fsSL https://raw.githubusercontent.com/tuan-cre/steam-desktop-startup-movi
 Windows (PowerShell, run as admin):
 
 ```powershell
+irm https://raw.githubusercontent.com/tuan-cre/steam-desktop-startup-movies/master/install.ps1 | iex
+```
+
+Or run the local copy:
+
+```powershell
 powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 

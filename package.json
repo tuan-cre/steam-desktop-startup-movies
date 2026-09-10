@@ -2,7 +2,7 @@
     "scripts": {
         "build": "millennium-ttc --build prod",
         "dev": "millennium-ttc --build dev",
-        "postbuild": "cp -r .millennium/Dist/* frontend/ 2>/dev/null || true"
+        "postbuild": "node -e \"const fs=require('fs'),path=require('path');const src='.millennium/Dist',dst='frontend';fs.mkdirSync(dst,{recursive:true});for(const f of fs.readdirSync(src)){fs.copyFileSync(path.join(src,f),path.join(dst,f))}\""
     },
     "devDependencies": {
         "@steambrew/client": "^5.8.4",
