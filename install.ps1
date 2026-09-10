@@ -46,17 +46,9 @@ if ((-not (Test-Path "$Env:ProgramFiles(x86)\Steam\millennium")) -and (-not (Tes
     Write-Warning "Millennium not found (<Steam>\millennium). Install first: https://steambrew.app/"
 }
 
-# --- Python check (required on Windows: serves movies/ over http) ---
-$pyOk = $false
-foreach ($cmd in @("python", "py")) {
-    try {
-        $out = & $cmd -c "print(1)" 2>&1
-        if (($out | Out-String).Trim() -eq "1") { $pyOk = $true; Write-Host "python: $cmd (http serving on)"; break }
-    } catch {}
-}
-if (-not $pyOk) {
-    Write-Warning "No working python found - install Python 3.12+ (winget install Python.Python.3.12) or the http server cannot start."
-}
+# --- Media serving (Windows): movies embed as data URLs, no python needed ---
+# Only ffmpeg is optional (thumbnail generation).
+Write-Host "serving: embedded data URLs (no server, no python required)"
 
 if ($Release -ne "") {
     Write-Host "Installing from release zip: $Release"

@@ -10,22 +10,33 @@ local cached_movies = nil
 local cached_count = 0
 local ffmpeg_bin = nil
 
--- Millennium ftp VFS: https://millennium.ftp/<absolute_path> is intercepted by
--- network_hook_ctl::vfs_request_handler (src/engine/http_hooks.cc:135) and
--- served via Fetch.fulfillRequest with proper mime. No python http.server needed.
---
--- Windows exception: the VFS handler reads files with std::ifstream in text
--- mode (http_hooks.cc:173) and has no video MIME types at all
+-- Serving model.
+-- Linux: Millennium ftp VFS, https://millennium.ftp/<absolute_path>,
+-- intercepted by network_hook_ctl::vfs_request_handler
+-- (Millennium src/engine/http_hooks.cc:135). No local server needed.
+-- Windows: the VFS handler reads files with std::ifstream in text mode
+-- (http_hooks.cc:173) and has no video MIME types at all
 -- (src/include/millennium/mime_types.h:30 — CSS/JS/fonts/images/HTML only).
 -- Text-mode reads stop at the first 0x1A byte, which every WebM starts with
--- (EBML magic), so video comes back empty -> MEDIA_ERR_SRC_NOT_SUPPORTED.
--- On Windows we serve movies/ over a local python http.server instead.
+-- (EBML magic), so video comes back empty -> MEDIA_ERR_SRC_NOT_SUPPORTED
+-- (verified live: FTP playback flashes black 0.1s then dismisses).
+-- Windows therefore embeds movies as base64 data URLs (read + encoded
+-- in-process: zero spawned consoles, zero python dependency, zero ports).
+-- One movie is ever embedded at a time (the one about to play), so peak
+-- cost is ~1.33x a single file. Files over DATA_MAX_BYTES are refused.
 local FTP_BASE = "https://millennium.ftp"
 
-local HTTP_PORT = 18080
-local HTTP_BASE = "http://127.0.0.1:" .. HTTP_PORT
-local python_bin = nil
-local http_server_started = false
+local DATA_MAX_BYTES = 64 * 1024 * 1024
+
+local DATA_VIDEO_MIME = {
+    [".webm"] = "video/webm",
+    [".mp4"] = "video/mp4",
+    [".m4v"] = "video/mp4",
+    [".mov"] = "video/quicktime",
+    [".mkv"] = "video/x-matroska",
+    [".ogv"] = "video/ogg",
+    [".ogg"] = "video/ogg",
+}
 
 local function url_encode_ftp(s)
     -- mirrors utils::url::encode_url (src/include/millennium/url_parser.h:39):
@@ -44,23 +55,6 @@ local function url_encode_ftp(s)
     return (s:gsub("([^%w%-%_%.%~%/ ])", enc_char))
 end
 
-local function url_encode_http(s)
-    -- RFC 3986 for python http.server: space -> %20 ( NOT "+" ),
-    -- unreserved + "/" verbatim, rest %XX (UTF-8 bytes).
-    local out = {}
-    for i = 1, #s do
-        local c = s:sub(i, i)
-        local b = string.byte(c)
-        if (b >= 48 and b <= 57) or (b >= 65 and b <= 90) or (b >= 97 and b <= 122)
-           or c == "-" or c == "_" or c == "." or c == "~" or c == "/" then
-            out[#out + 1] = c
-        else
-            out[#out + 1] = string.format("%%%02X", b)
-        end
-    end
-    return table.concat(out)
-end
-
 local function ftp_url_from_path(abs_path)
     -- mirrors utils::url::encode_url + get_url_from_path (src/include/millennium/url_parser.h:79)
     -- On Linux: FTP_BASE + encode(path without leading "/")
@@ -69,280 +63,52 @@ local function ftp_url_from_path(abs_path)
     return FTP_BASE .. "/" .. url_encode_ftp(p)
 end
 
-local function http_url_for_file(name)
-    return HTTP_BASE .. "/" .. url_encode_http(name)
-end
+-- Video extensions Chromium (steamwebhelper) can actually decode.
+-- Listed broadly; unplayable files fail gracefully in the frontend (onError -> dismiss).
+local VIDEO_EXTS = {
+    [".webm"] = true,
+    [".mp4"] = true,
+    [".m4v"] = true,
+    [".mov"] = true,
+    [".mkv"] = true,
+    [".ogv"] = true,
+    [".ogg"] = true,
+}
 
-local function http_url_for_thumb(name)
-    return HTTP_BASE .. "/thumbs/" .. url_encode_http(name)
-end
-
-local function movie_url(abs_path, name)
-    if IS_WINDOWS then
-        return http_url_for_file(name)
-    end
-    return ftp_url_from_path(abs_path)
-end
-
-local function thumb_url(abs_thumb_path, thumb_name)
-    if IS_WINDOWS then
-        return http_url_for_thumb(thumb_name)
-    end
-    return ftp_url_from_path(abs_thumb_path)
+local function is_video_file(name)
+    local ext = fs.extension(name)
+    if not ext or ext == "" then return false, nil end
+    ext = ext:lower()
+    return VIDEO_EXTS[ext] == true, ext
 end
 
 local function trim(s)
     return (s or ""):match("^%s*(.-)%s*$")
 end
 
--- Validate a python candidate by actually running it. Rejects the dead
--- Microsoft Store stub (which prints a Store error instead of "1").
-local function try_python_candidate(cmd)
-    local probe = string.format('%s -c "print(1)" 2>&1', cmd)
-    local h = io.popen(probe)
-    if not h then return nil end
-    local out = h:read("*a") or ""
-    h:close()
-    if trim(out) == "1" then
-        return cmd
-    end
-    return nil
-end
-
--- Cache for the validated python command. Every io.popen on Windows flashes
--- a console window at Steam launch, so once validated we persist the command
--- and trust it (absolute paths outside WindowsApps can't be the Store stub).
-local function python_cache_path()
-    if not thumbs_path then return nil end
-    return fs.join(thumbs_path, ".python_bin")
-end
-
-local function read_python_cache()
-    local cp = python_cache_path()
-    if not cp then return nil end
-    local f = io.open(cp, "r")
+local function base64_of_file(abs_path)
+    local f = io.open(abs_path, "rb")
     if not f then return nil end
-    local cmd = trim(f:read("*l") or "")
+    local bytes = f:read("*a") or ""
     f:close()
-    if cmd == "" then return nil end
-    -- Trust absolute paths only; bare commands (python, py -3) are
-    -- revalidated below since PATH / launcher state may have changed.
-    if cmd:find("\\") or cmd:find("/") then
-        local exe = cmd:match('^"([^"]+)"') or cmd:match("^(%S+)")
-        if exe and exe:lower():find("windowsapps") == nil and fs.exists(exe) then
-            return cmd
-        end
+    if #bytes == 0 or #bytes > DATA_MAX_BYTES then
+        return nil, #bytes
     end
-    return nil
-end
-
-local function write_python_cache(cmd)
-    local cp = python_cache_path()
-    if not cp then return end
-    pcall(function()
-        local f = io.open(cp, "w")
-        if f then f:write(cmd or ""); f:close() end
-    end)
-end
-
-local function find_python()
-    if python_bin then return python_bin end
-    if IS_WINDOWS then
-        -- 0-spawn fast path: previously validated absolute path.
-        local cached = read_python_cache()
-        if cached then
-            python_bin = cached
-            logger:info("Found python (cached): " .. python_bin)
-            return python_bin
-        end
-        -- 0-spawn pre-filter: only validate files that actually exist.
-        -- (Never WindowsApps: the Store stub exists on disk but is dead;
-        -- try_python_candidate rejects it by running it.)
-        local localapp = os.getenv("LOCALAPPDATA") or ""
-        local pfiles = os.getenv("ProgramFiles") or "C:\\Program Files"
-        local abs_candidates = {}
-        if localapp ~= "" then
-            abs_candidates[#abs_candidates + 1] = '"' .. localapp .. '\\Programs\\Python\\Python312\\python.exe"'
-            abs_candidates[#abs_candidates + 1] = '"' .. localapp .. '\\Programs\\Python\\Python313\\python.exe"'
-            abs_candidates[#abs_candidates + 1] = '"' .. localapp .. '\\Programs\\Python\\Python314\\python.exe"'
-        end
-        abs_candidates[#abs_candidates + 1] = '"' .. pfiles .. '\\Python312\\python.exe"'
-        abs_candidates[#abs_candidates + 1] = '"' .. pfiles .. '\\Python313\\python.exe"'
-        abs_candidates[#abs_candidates + 1] = '"C:\\Python312\\python.exe"'
-        abs_candidates[#abs_candidates + 1] = '"C:\\Python313\\python.exe"'
-        for _, cmd in ipairs(abs_candidates) do
-            local exe = cmd:match('^"([^"]+)"') or cmd
-            if fs.exists(exe) then
-                local ok = try_python_candidate(cmd)
-                if ok then
-                    python_bin = ok
-                    logger:info("Found python: " .. python_bin)
-                    write_python_cache(python_bin)
-                    return python_bin
-                end
-                -- Exists but doesn't run: keep checking the rest.
-            end
-        end
-        -- NOTE: no "python3" here — on Windows that name is usually the
-        -- dead Store stub, and probing it costs a console flash.
-        for _, cmd in ipairs({ "python", "py -3" }) do
-            local ok = try_python_candidate(cmd)
-            if ok then
-                python_bin = ok
-                logger:info("Found python: " .. python_bin)
-                write_python_cache(python_bin)
-                return python_bin
-            end
-        end
-        logger:warn("No working python found - Windows http serving disabled")
-        return nil
+    local has_utils, utils = pcall(require, "utils")
+    if not has_utils or not utils or not utils.base64_encode then
+        return nil, #bytes
     end
-    for _, cmd in ipairs({ "python3", "python" }) do
-        local ok = try_python_candidate(cmd)
-        if ok then
-            python_bin = ok
-            logger:info("Found python: " .. python_bin)
-            return python_bin
-        end
-    end
-    logger:warn("No working python found - Windows http serving disabled")
-    return nil
-end
-
--- Spawn-free port check via Millennium's built-in http module (libcurl).
--- Every io.popen/os.execute on Windows flashes a console window at Steam
--- launch, so prefer this over powershell/ping probes. Returns nil when the
--- http module is unavailable (caller falls back to spawn probes).
-local _http_mod = nil
-local function http_serving()
-    if _http_mod == nil then
-        local ok, mod = pcall(require, "http")
-        _http_mod = (ok and mod) or false
-    end
-    if not _http_mod then return nil end
-    local ok, res = pcall(_http_mod.get, HTTP_BASE .. "/", { timeout = 1 })
-    if ok and res and res.status then
-        return true
-    end
-    return false
-end
-
-local function port_open()
-    local via_http = http_serving()
-    if via_http ~= nil then return via_http end
-    if IS_WINDOWS then
-        -- powershell TcpClient probe; prints "open" on success.
-        -- Single quotes for the IP survive cmd -> powershell quoting layers.
-        local h = io.popen(
-            'powershell -NoProfile -Command "try { ' ..
-            "$c = New-Object Net.Sockets.TcpClient; " ..
-            "$c.Connect('127.0.0.1'," .. HTTP_PORT .. "); " ..
-            '$c.Close(); Write-Output open } catch { Write-Output closed }" 2>NUL'
-        )
-        if h then
-            local out = trim(h:read("*a") or "")
-            h:close()
-            return out == "open"
-        end
-        return false
-    else
-        local h = io.popen(
-            "(exec 3<>/dev/tcp/127.0.0.1/" .. HTTP_PORT .. ") 2>/dev/null && echo open || echo closed"
-        )
-        if h then
-            local out = trim(h:read("*a") or "")
-            h:close()
-            return out == "open"
-        end
-        return false
-    end
-end
-
-local function start_http_server()
-    if http_server_started then return true end
-    if port_open() then
-        -- Something (maybe a previous instance) already serves the port.
-        http_server_started = true
-        logger:info("http server already listening on " .. HTTP_PORT)
-        return true
-    end
-    local py = find_python()
-    if not py then return false end
-    if not movies_path then return false end
-
-    if IS_WINDOWS then
-        -- Serve with windowless pythonw.exe when available: python.exe is a
-        -- console app, so the server would otherwise hold a visible console
-        -- window open for the entire Steam session. Validation still uses
-        -- python.exe (pythonw can't print the "1" probe to a pipe).
-        local srv = py
-        local w = py:gsub("python%.exe", "pythonw.exe", 1):gsub("^python$", "pythonw"):gsub("^py ", "pyw ")
-        local w_exe = w:match('^"([^"]+)"') or w:match("^(%S+)")
-        -- Gate absolute paths on existence; bare names (pythonw on PATH
-        -- next to python) are trusted — resolving them costs a spawn.
-        if w_exe and (w_exe:find("\\") or w_exe:find("/")) then
-            if fs.exists(w_exe) then srv = w end
-        else
-            srv = w
-        end
-        -- start /B detaches; > NUL 2>&1 keeps Steam logs clean.
-        local cmd = string.format(
-            'start "" /B %s -m http.server %d --bind 127.0.0.1 --directory "%s" > NUL 2>&1',
-            srv, HTTP_PORT, movies_path
-        )
-        os.execute(cmd)
-    else
-        local cmd = string.format(
-            '%s -m http.server %d --bind 127.0.0.1 --directory "%s" >/dev/null 2>&1 &',
-            py, HTTP_PORT, movies_path
-        )
-        os.execute(cmd)
-    end
-
-    -- Poll for the port to come up. http_serving() is spawn-free with a
-    -- 1s timeout, so ~5 tries ≈ 5s max with zero console flashes.
-    for _ = 1, 5 do
-        if port_open() then
-            http_server_started = true
-            logger:info("http server listening on " .. HTTP_BASE .. " (dir: " .. movies_path .. ")")
-            return true
-        end
-    end
-    logger:warn("http server failed to bind port " .. HTTP_PORT)
-    return false
-end
-
-local function stop_http_server()
-    if not http_server_started then return end
-    http_server_started = false
-    if not IS_WINDOWS then return end
-    -- Kill only the process bound to our port (never blanket python.exe).
-    local ok, _ = pcall(function()
-        local h = io.popen('netstat -ano 2>NUL | findstr ":' .. HTTP_PORT .. '" | findstr LISTENING')
-        if not h then return end
-        local out = h:read("*a") or ""
-        h:close()
-        -- Collect trailing PIDs from each LISTENING line, kill each once.
-        local pids = {}
-        for line in out:gmatch("[^\r\n]+") do
-            local pid = line:match("(%d+)%s*$")
-            if pid and pid ~= "0" then pids[pid] = true end
-        end
-        for pid, _ in pairs(pids) do
-            logger:info("Stopping http server PID " .. pid)
-            os.execute("taskkill /PID " .. pid .. " /F > NUL 2>&1")
-        end
-    end)
-    if not ok then
-        logger:warn("http server cleanup failed (port " .. HTTP_PORT .. " may linger)")
-    end
+    local b64 = utils.base64_encode(bytes)
+    if not b64 or b64 == "" then return nil, #bytes end
+    return b64, #bytes
 end
 
 local function find_ffmpeg()
     if ffmpeg_bin then return ffmpeg_bin end
     if IS_WINDOWS then
-        -- 0-spawn fast path: winget link + usual install spots first.
-        -- `where` flashes a console, so it is the fallback, not the default.
+        -- fs.exists checks first: `where` flashes a console, so it stays
+        -- the fallback. (Thumbnail generation is the only remaining spawn,
+        -- and only fires while a thumb is missing.)
         local localapp = os.getenv("LOCALAPPDATA") or ""
         local pfiles = os.getenv("ProgramFiles") or "C:\\Program Files"
         local abs = {}
@@ -386,12 +152,16 @@ local function has_autoplay_flag()
     if _has_autoplay_flag ~= nil then return _has_autoplay_flag end
     -- NOTE: this only observes whether steamwebhelper runs with
     -- --autoplay-policy (unmuted autoplay available, shipped stock by Steam).
-    local h
+    -- The result only feeds a log line and an undisplayed status field —
+    -- playback unmutes opportunistically regardless — so on Windows we skip
+    -- the tasklist probe entirely: it costs a console flash every time the
+    -- settings panel loads get_status, for zero visible benefit.
     if IS_WINDOWS then
-        h = io.popen('tasklist /V 2>NUL | findstr /I "autoplay-policy" >NUL && echo yes || echo no')
-    else
-        h = io.popen("ps aux 2>/dev/null | grep -q 'autoplay-policy' && echo yes || echo no")
+        _has_autoplay_flag = false
+        logger:info("Autoplay-flag probe skipped on Windows (muted-first hybrid fallback)")
+        return false
     end
+    local h = io.popen("ps aux 2>/dev/null | grep -q 'autoplay-policy' && echo yes || echo no")
     if h then
         local r = h:read("*a") or ""
         h:close()
@@ -405,25 +175,6 @@ local function has_autoplay_flag()
     end
     _has_autoplay_flag = false
     return false
-end
-
--- Video extensions Chromium (steamwebhelper) can actually decode.
--- Listed broadly; unplayable files fail gracefully in the frontend (onError -> dismiss).
-local VIDEO_EXTS = {
-    [".webm"] = true,
-    [".mp4"] = true,
-    [".m4v"] = true,
-    [".mov"] = true,
-    [".mkv"] = true,
-    [".ogv"] = true,
-    [".ogg"] = true,
-}
-
-local function is_video_file(name)
-    local ext = fs.extension(name)
-    if not ext or ext == "" then return false, nil end
-    ext = ext:lower()
-    return VIDEO_EXTS[ext] == true, ext
 end
 
 local function ensure_movies_dir()
@@ -458,14 +209,18 @@ local function ensure_movies_dir()
     return movies_path
 end
 
+local function thumb_name_for(movie_name)
+    local movie_ext = movie_name:match("%.([^%.]+)$") or ""
+    -- ext has NO dot here, so drop #ext + 1 (dot) chars: sub end = -(#ext + 2)
+    local base = movie_name:sub(1, -(#movie_ext + 2))
+    return base .. ".jpg"
+end
+
 local function generate_thumbnail(movie_path, movie_name)
     if not thumbs_path or not ffmpeg_bin then return nil end
 
     local ok, thumb_url_or_nil = pcall(function()
-        local movie_ext = movie_name:match("%.([^%.]+)$") or ""
-        -- ext has NO dot here, so drop #ext + 1 (dot) chars: sub end = -(#ext + 2)
-        local base = movie_name:sub(1, -(#movie_ext + 2))
-        local thumb_name = base .. ".jpg"
+        local thumb_name = thumb_name_for(movie_name)
         local thumb_path = fs.join(thumbs_path, thumb_name)
 
         if not fs.exists(thumb_path) then
@@ -485,7 +240,12 @@ local function generate_thumbnail(movie_path, movie_name)
             return nil
         end
 
-        return thumb_url(thumb_path, thumb_name)
+        if IS_WINDOWS then
+            -- List carries existence only; bytes resolve on demand via
+            -- get_thumb_data (see generate_thumbnail's true below).
+            return true -- exists; frontend fetches bytes via get_thumb_data
+        end
+        return ftp_url_from_path(thumb_path)
     end)
     if not ok then
         logger:warn("Thumbnail failed for '" .. tostring(movie_name) .. "': " .. tostring(thumb_url_or_nil))
@@ -524,16 +284,28 @@ function json_encode(obj)
     end
 end
 
+-- Reject anything but a bare filename (no traversal).
+local function clean_name(arg)
+    local name = nil
+    if type(arg) == "string" then
+        name = arg
+    elseif type(arg) == "table" then
+        name = arg.name
+    end
+    if not name or name == "" then return nil end
+    if name:find("[/\\]") or name:find("%.%.") then
+        logger:warn("rejected bad name '" .. tostring(name) .. "'")
+        return nil
+    end
+    return name
+end
+
 function get_movies()
     if cached_movies then return cached_movies end
 
     local ok, result_json = pcall(function()
         local path = ensure_movies_dir()
         if not path then return "[]" end
-
-        if IS_WINDOWS and not http_server_started then
-            start_http_server()
-        end
 
         local entries, err = fs.list(path)
         if not entries then
@@ -557,15 +329,21 @@ function get_movies()
                         local base = name:sub(1, -(#ext + 1)):lower()
                         if not seen[base] then
                             seen[base] = true
-                            local abs_path = fs.join(path, name)
-                            local url = movie_url(abs_path, name)
-                            local thumb = generate_thumbnail(abs_path, name)
-                            table.insert(result, {
+                            local item = {
                                 name = name,
                                 size = entry.size or 0,
-                                url = url,
-                                thumb = thumb
-                            })
+                            }
+                            if IS_WINDOWS then
+                                -- Windows: URLs resolve on demand via
+                                -- get_movie_data / get_thumb_data (embedded
+                                -- data). Nothing to spawn or serve here.
+                                item.has_thumb = generate_thumbnail(fs.join(path, name), name) ~= nil
+                            else
+                                local abs_path = fs.join(path, name)
+                                item.url = ftp_url_from_path(abs_path)
+                                item.thumb = generate_thumbnail(abs_path, name)
+                            end
+                            table.insert(result, item)
                         end
                     else
                         skipped = skipped + 1
@@ -598,9 +376,57 @@ function refresh_movies()
     return get_movies()
 end
 
+-- Windows: embed one movie as a data URL (the one about to play).
+-- Single-file weight only; oversized files are refused.
+function get_movie_data(arg)
+    local name = clean_name(arg)
+    if not name then return nil end
+    local ok, url = pcall(function()
+        local path = ensure_movies_dir()
+        if not path then return nil end
+        local is_video, ext = is_video_file(name)
+        if not is_video then return nil end
+        local abs = fs.join(path, name)
+        if not fs.exists(abs) then return nil end
+        local b64, size = base64_of_file(abs)
+        if not b64 then
+            logger:warn("get_movie_data: '" .. name .. "' unreadable or size " .. tostring(size) .. " out of range")
+            return nil
+        end
+        return "data:" .. (DATA_VIDEO_MIME[ext] or "video/webm") .. ";base64," .. b64
+    end)
+    if not ok then
+        logger:warn("get_movie_data failed: " .. tostring(url))
+        return nil
+    end
+    return url
+end
+
+-- Windows: embed one thumbnail as a data URL (tiny jpg).
+function get_thumb_data(arg)
+    local name = clean_name(arg)
+    if not name then return nil end
+    local ok, url = pcall(function()
+        ensure_movies_dir()
+        if not thumbs_path then return nil end
+        local is_video = is_video_file(name)
+        if not is_video then return nil end
+        local abs = fs.join(thumbs_path, thumb_name_for(name))
+        if not fs.exists(abs) then return nil end
+        local b64, size = base64_of_file(abs)
+        if not b64 then return nil end
+        return "data:image/jpeg;base64," .. b64
+    end)
+    if not ok then
+        logger:warn("get_thumb_data failed: " .. tostring(url))
+        return nil
+    end
+    return url
+end
+
 local function on_load()
     if IS_WINDOWS then
-        logger:info("Startup Movies plugin loaded (windows/http http.server)")
+        logger:info("Startup Movies plugin loaded (windows/data embedded, zero processes)")
     else
         logger:info("Startup Movies plugin loaded (dev/ftp VFS - no python server)")
     end
@@ -609,14 +435,9 @@ local function on_load()
     millennium.add_browser_js("frontend/steam-hide.js")
 
     find_ffmpeg()
-    if IS_WINDOWS then
-        -- movies_path must exist before the server can bind --directory to it.
-        ensure_movies_dir()
-        start_http_server()
-    end
     get_movies()
     if IS_WINDOWS then
-        logger:info("Found " .. cached_count .. " movie files (served via " .. HTTP_BASE .. ")")
+        logger:info("Found " .. cached_count .. " movie files (embedded data URLs)")
     else
         logger:info("Found " .. cached_count .. " movie files (served via https://millennium.ftp)")
     end
@@ -625,7 +446,6 @@ local function on_load()
 end
 
 local function on_unload()
-    stop_http_server()
     logger:info("Startup Movies plugin unloaded")
 end
 
@@ -634,10 +454,8 @@ function get_status()
         has_ffmpeg = ffmpeg_bin ~= nil,
         has_autoplay_flag = has_autoplay_flag(),
         ftp_serving = not IS_WINDOWS,
-        http_serving = IS_WINDOWS and http_server_started,
-        is_windows = IS_WINDOWS,
-        has_python = python_bin ~= nil,
-        http_port = HTTP_PORT
+        data_serving = IS_WINDOWS,
+        is_windows = IS_WINDOWS
     })
 end
 
@@ -651,5 +469,7 @@ return {
     get_movies = get_movies,
     refresh_movies = refresh_movies,
     get_status = get_status,
-    log_message = log_message
+    log_message = log_message,
+    get_movie_data = get_movie_data,
+    get_thumb_data = get_thumb_data
 }

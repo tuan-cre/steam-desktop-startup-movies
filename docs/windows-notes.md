@@ -1,5 +1,12 @@
-# Windows support — revisit notes
+# Windows support — notes
 
+## Serving model (final)
+- Linux: FTP VFS (`https://millennium.ftp`). Unchanged.
+- Windows: embedded base64 data URLs (no server, no python, no port).
+  One movie is ever embedded at a time; files over 64MB are refused
+  (`DATA_MAX_BYTES` in `backend/main.lua`).
+
+## History
 Deleted branch: `windows-support` (was a mess, outdated vs master).
 Full history still on origin until deleted; diary was `WINDOWS-SUPPORT.md` on that branch.
 
@@ -21,21 +28,30 @@ Millennium's FTP VFS (`https://millennium.ftp`) can't serve video on Windows:
   would be small (binary mode + video MIME rows) but is out of scope for this
   plugin — we work around it below.
 
-## Approach (in progress on master)
-Revive python http.server: serve `movies/` on `http://127.0.0.1:18080`,
-validate python actually runs (reject the dead Store stub), launch
-non-blocking via `start /B`, confirm the port listens (TcpClient probe),
-kill only the PID bound to 18080 on unload. Implemented in
-`backend/main.lua` (`IS_WINDOWS` branch); installer is `install.ps1`.
-Linux path (FTP VFS) untouched.
+## Verdict: FTP confirmed dead on Windows (tested Sep 2026)
+A/B experiment in the real client, same file (`blue-archive.webm`):
+- `http://127.0.0.1:18080/blue-archive.webm` → plays, audio works.
+- `https://millennium.ftp/c%3A/program%20files%20%28x86%29/.../blue-archive.webm`
+  → 0.1s black flash then instant dismiss (`onError`), repeatable.
+Matches the code diagnosis exactly (text-mode read → empty body +
+`text/plain` MIME → `MEDIA_ERR_SRC_NOT_SUPPORTED`).
+
+## Detour: local http.server (tried, then removed)
+An intermediate port served `movies/` over `http://127.0.0.1:18080` via
+`pythonw -m http.server` (Store-stub rejection, single-console launch,
+spawn-free polling). It worked end-to-end (video + audio + thumbs), but every
+`io.popen`/`os.execute` flashes a console at Steam launch, and combining
+launch+validate into one console exposed a pipe-inheritance hang
+(`read()` blocks until the detached child exits — forever). Embedded data
+URLs achieve the same with zero processes, so the server was deleted.
+Lessons kept: `fs.exists` pre-filters before any probe, `utils.base64_encode`
+/ `http` builtins over shell-outs, `pcall` the startup path.
 
 ## Facts that may have shifted
 - Master is now v1.1.1: source-of-truth is `frontend/index.tsx` (starlight
   compiles it at load), multi-format support, no Startup Location detection,
   no Millennium patch needed (Steam ships `--autoplay-policy` stock).
-- Any Windows retry must rebuild on current master, not on the old branch code.
-- Correct Windows install path was
+- Correct Windows install path is
   `C:\Program Files (x86)\Steam\millennium\plugins\startup-movies`
-  (not `%LOCALAPPDATA%\millennium\...`).
-- Open item when parked: confirm the python server actually binds a port on
-  Windows, then strip the `DBG` logging.
+  (not `%LOCALAPPDATA%\millennium\...`). No python needed; ffmpeg optional
+  (thumbnails). Installer: `install.ps1`.

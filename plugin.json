@@ -3,5 +3,5 @@
     "common_name": "Startup Movies",
     "description": "Plays startup movies on Steam launch, just like Steam Deck. Drop video files (.webm, .mp4, .mkv, .mov, …) into the plugin's movies/ folder.",
     "backendType": "lua",
-    "version": "1.1.1"
+    "version": "1.2.0"
 }

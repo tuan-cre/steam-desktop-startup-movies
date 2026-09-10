@@ -4,8 +4,16 @@ Millennium plugin that plays a startup movie on Steam launch, like Steam Deck.
 
 ## Install
 
+Linux:
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/tuan-cre/steam-desktop-startup-movies/master/install.sh | bash
+```
+
+Windows (PowerShell, run as admin):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
 Or manual:
@@ -15,6 +23,10 @@ git clone https://github.com/tuan-cre/steam-desktop-startup-movies ~/.local/shar
 cd ~/.local/share/millennium/plugins/startup-movies
 npm install && npm run build
 ```
+
+Windows manual path is `C:\Program Files (x86)\Steam\millennium\plugins\startup-movies`.
+No python needed on Windows (movies embed directly); ffmpeg is optional
+(thumbnails only).
 
 Requires [Millennium](https://steambrew.app) v3+.
 
