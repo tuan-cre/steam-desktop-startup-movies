@@ -10,6 +10,8 @@
   Custom plugin dir (default: "$Env:ProgramFiles(x86)\Steam\millennium\plugins\startup-movies").
 .PARAMETER Rebuild
   Force npm rebuild (default: use shipped .millennium/Dist/index.js).
+.PARAMETER NoBuild
+  Deprecated no-op alias (prebuilt is used by default, as in install.sh).
 .PARAMETER Release
   Install from a prebuilt zip URL (no git/node needed).
 .PARAMETER Branch
@@ -21,6 +23,7 @@
 param(
     [string]$Dir = "",
     [switch]$Rebuild,
+    [switch]$NoBuild,
     [string]$Release = "",
     [string]$Branch = "master"
 )
@@ -32,7 +35,7 @@ $PluginName = "startup-movies"
 if ([string]::IsNullOrWhiteSpace($Dir)) {
     $steamRoot = "${Env:ProgramFiles(x86)}\Steam"
     if (-not (Test-Path $steamRoot)) {
-        # Fallback: 32-bit Steam on 64-bit Windows is the norm;ऐ
+        # Fallback: 32-bit Steam on 64-bit Windows is the norm;
         $steamRoot = "$Env:ProgramFiles\Steam"
     }
     $Dir = Join-Path $steamRoot "millennium\plugins\$PluginName"
