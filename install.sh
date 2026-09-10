@@ -17,7 +17,6 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --dir) INSTALL_DIR="$2"; shift 2 ;;
         --rebuild) REBUILD=1; shift ;;
-        --no-build) REBUILD=0; shift ;; # deprecated: prebuilt is used by default now
         --release) RELEASE_URL="$2"; shift 2 ;;
         --branch) BRANCH="$2"; shift 2 ;;
         -h|--help)
