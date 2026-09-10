@@ -16,6 +16,12 @@ This note exists so future edits don't silently break it.
   (`Millennium/src/include/millennium/url_parser.h:39`). Drift breaks
   every movie URL, surfacing only as a silent `onError → dismiss`.
 - Layout: `movies/` next to the backend file, `movies/thumbs` writable.
+- Frontend entry: Millennium loads `<plugin>/.millennium/Dist/index.js`
+  (`Millennium/src/engine/plugin_manager.cc:173`) — never `frontend/`.
+  Both files are committed and must stay byte-identical on every
+  `index.tsx` change; a fresh clone with a stale/missing `Dist/` runs
+  old UI (or none) with no error. The `frontend/` copy exists only for
+  the installer check and dev convenience.
 
 ## What the Windows port changed on the shared side
 - `fs.create_directories` instead of `mkdir -p` (works everywhere).
@@ -25,7 +31,7 @@ This note exists so future edits don't silently break it.
   Linux items are unchanged (`url` + `thumb` FTP URLs).
 - `resolvePlayUrl` in the frontend: FTP URL if present, else on-demand
   `get_movie_data`. Linux always takes the first branch.
-- `install.sh` ships prebuilt `frontend/index.js` (skip-by-default, `--rebuild` to force).
+- `install.sh` ships both prebuilt frontend files (skip-by-default, `--rebuild` to force).
   `install.ps1` is its Windows mirror — keep flags
   (`--dir`, `--rebuild`, `--release`, `--branch`) and layout guarantees
   (`movies/thumbs`) in lockstep.
