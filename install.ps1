@@ -8,8 +8,10 @@
   ensures movies/thumbs exist, and builds the frontend if needed.
 .PARAMETER Dir
   Custom plugin dir (default: "$Env:ProgramFiles(x86)\Steam\millennium\plugins\startup-movies").
+.PARAMETER Rebuild
+  Force npm rebuild (default: use shipped frontend/index.js).
 .PARAMETER NoBuild
-  Skip npm build even if frontend/index.js is missing/stale.
+  Deprecated, kept for compat (skip-by-default now).
 .PARAMETER Release
   Install from a prebuilt zip URL (no git/node needed).
 .PARAMETER Branch
@@ -20,6 +22,7 @@
 [CmdletBinding()]
 param(
     [string]$Dir = "",
+    [switch]$Rebuild,
     [switch]$NoBuild,
     [string]$Release = "",
     [string]$Branch = "master"
@@ -88,14 +91,9 @@ if ($Release -ne "") {
     New-Item -ItemType Directory -Force -Path (Join-Path $Dir "movies\thumbs") | Out-Null
 
     $indexJs = Join-Path $Dir "frontend\index.js"
-    $indexTsx = Join-Path $Dir "frontend\index.tsx"
-    $needBuild = $false
-    if (-not (Test-Path $indexJs)) { $needBuild = $true; Write-Host "frontend/index.js missing - build required" }
-    elseif ((Get-Item $indexTsx).LastWriteTime -gt (Get-Item $indexJs).LastWriteTime) { $needBuild = $true; Write-Host "frontend/index.tsx newer - rebuild" }
-
-    if ($needBuild -and (-not $NoBuild)) {
+    if ($Rebuild) {
         if (Get-Command npm -ErrorAction SilentlyContinue) {
-            Write-Host "Building frontend (npm run build) ..."
+            Write-Host "Rebuilding frontend (npm run build) ..."
             Push-Location $Dir
             try {
                 & npm install --silent 2>&1 | Select-Object -Last 5
@@ -103,10 +101,12 @@ if ($Release -ne "") {
             } finally { Pop-Location }
             Write-Host ("Build done: " + (Get-Item $indexJs).Length + " bytes")
         } else {
-            Write-Warning "npm missing - run: cd `"$Dir`"; npm install; npm run build"
+            throw "npm missing - cannot rebuild"
         }
+    } elseif (-not (Test-Path $indexJs)) {
+        Write-Warning "frontend/index.js missing - re-run with -Rebuild (needs npm)"
     } else {
-        Write-Host "Frontend built, skip build"
+        Write-Host "Frontend prebuilt, skip build (use -Rebuild to force)"
     }
 }
 

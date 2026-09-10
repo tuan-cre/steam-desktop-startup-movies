@@ -25,8 +25,9 @@ This note exists so future edits don't silently break it.
   Linux items are unchanged (`url` + `thumb` FTP URLs).
 - `resolvePlayUrl` in the frontend: FTP URL if present, else on-demand
   `get_movie_data`. Linux always takes the first branch.
-- `install.sh` untouched. `install.ps1` is its Windows mirror — keep flags
-  (`--dir`, `--no-build`, `--release`, `--branch`) and layout guarantees
+- `install.sh` ships prebuilt `frontend/index.js` (skip-by-default, `--rebuild` to force).
+  `install.ps1` is its Windows mirror — keep flags
+  (`--dir`, `--rebuild`, `--release`, `--branch`) and layout guarantees
   (`movies/thumbs`) in lockstep.
 - `package.json` `postbuild` still uses POSIX `cp -r`; breaks Windows
   `npm run build`. Unfixed — replace with a node one-liner when touched.
