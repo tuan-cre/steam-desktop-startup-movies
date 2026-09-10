@@ -2,7 +2,7 @@
 # One-liner installer for steam-desktop-startup-movies
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/tuan-cre/steam-desktop-startup-movies/master/install.sh | bash
-#   bash install.sh [--dir <path>] [--rebuild] [--release <zip-url>]
+#   bash install.sh [--dir <path>] [--no-build] [--release <zip-url>]
 set -euo pipefail
 
 REPO="https://github.com/tuan-cre/steam-desktop-startup-movies.git"
@@ -10,20 +10,19 @@ BRANCH="master"
 PLUGIN_NAME="startup-movies"
 
 INSTALL_DIR=""
-REBUILD=0
+NO_BUILD=0
 RELEASE_URL=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dir) INSTALL_DIR="$2"; shift 2 ;;
-        --rebuild) REBUILD=1; shift ;;
-        --no-build) REBUILD=0; shift ;; # deprecated: skip-by-default now, kept for compat
+        --no-build) NO_BUILD=1; shift ;;
         --release) RELEASE_URL="$2"; shift 2 ;;
         --branch) BRANCH="$2"; shift 2 ;;
         -h|--help)
-            echo "Usage: install.sh [--dir <path>] [--rebuild] [--release <zip-url>] [--branch <branch>]"
+            echo "Usage: install.sh [--dir <path>] [--no-build] [--release <zip-url>] [--branch <branch>]"
             echo "  --dir      Custom plugin dir (default: \$XDG_DATA_HOME/millennium/plugins/$PLUGIN_NAME)"
-            echo "  --rebuild  Force npm rebuild (default: use shipped frontend/index.js)"
+            echo "  --no-build Skip the npm build step"
             echo "  --release  Install from prebuilt zip (no git/node)"
             exit 0
             ;;
@@ -39,8 +38,8 @@ fi
 echo "=== Startup Movies installer ==="
 echo "Target: $INSTALL_DIR"
 
-if [[ ! -d "${XDG_DATA_HOME:-$HOME/.local/share}/millennium" && ! -d "${XDG_CONFIG_HOME:-$HOME/.config}/millennium" && ! -d "$HOME/.millennium" ]]; then
-    echo "WARN: Millennium not found (~/.config/millennium). Install first: https://steambrew.app/"
+if [[ ! -d "${XDG_DATA_HOME:-$HOME/.local/share}/millennium" && ! -d "$HOME/.millennium" ]]; then
+    echo "WARN: Millennium not found (~/.local/share/millennium). Install first: https://steambrew.app/"
 fi
 
 if [[ -n "$RELEASE_URL" ]]; then
@@ -73,23 +72,75 @@ else
         git clone --depth 1 --branch "$BRANCH" "$REPO" "$INSTALL_DIR"
     fi
     mkdir -p "$INSTALL_DIR/movies/thumbs"
-    if [[ $REBUILD -eq 1 ]]; then
+    need_build=0
+    if [[ ! -f "$INSTALL_DIR/frontend/index.js" ]]; then
+        need_build=1; echo "frontend/index.js missing - build required"
+    elif [[ "$INSTALL_DIR/frontend/index.tsx" -nt "$INSTALL_DIR/frontend/index.js" ]]; then
+        need_build=1; echo "frontend/index.tsx newer - rebuild"
+    fi
+    if [[ $need_build -eq 1 && $NO_BUILD -eq 0 ]]; then
         if command -v npm >/dev/null 2>&1; then
-            echo "Rebuilding frontend (npm run build) ..."
+            echo "Building frontend (npm run build) ..."
             (cd "$INSTALL_DIR" && npm install --silent 2>&1 | tail -5; npm run build 2>&1 | tail -20)
             echo "Build done: $(wc -c < "$INSTALL_DIR/frontend/index.js") bytes"
         else
-            echo "WARN: npm missing - cannot rebuild" >&2; exit 1
+            echo "WARN: npm missing - run: (cd \"$INSTALL_DIR\" && npm install && npm run build)"
         fi
-    elif [[ ! -f "$INSTALL_DIR/frontend/index.js" ]]; then
-        echo "WARN: frontend/index.js missing - re-run with --rebuild (needs npm)" >&2
     else
-        echo "Frontend prebuilt, skip build (use --rebuild to force)"
+        echo "Frontend built, skip build"
     fi
 fi
 
-# --- Manual enable (no auto-edit of Millennium config) ---
-echo "Enable '$PLUGIN_NAME' in Millennium settings, then restart Steam."
+# --- Enable the plugin (Millennium keeps enabledPlugins in config.json) ---
+# Steam must be closed: Millennium rewrites this file on exit/shutdown,
+# which would clobber an edit made while it runs.
+if pgrep -x steam >/dev/null 2>&1; then
+    echo "WARN: Steam is running - skipping auto-enable (close Steam and re-run, or enable manually in Millennium settings)."
+else
+    MILLENNIUM_CONFIG=""
+    for root in "${XDG_DATA_HOME:-$HOME/.local/share}/millennium" "$HOME/.millennium"; do
+        cand="$root/config/config.json"
+        if [[ -f "$cand" ]]; then MILLENNIUM_CONFIG="$cand"; break; fi
+    done
+    if [[ -z "$MILLENNIUM_CONFIG" ]]; then
+        echo "WARN: Millennium config not found - enable the plugin manually in settings."
+    elif command -v node >/dev/null 2>&1; then
+        cp "$MILLENNIUM_CONFIG" "$MILLENNIUM_CONFIG.bak"
+        node -e '
+            const fs = require("fs");
+            const [cfgPath, name] = process.argv.slice(1);
+            const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+            cfg.plugins = cfg.plugins || {};
+            cfg.plugins.enabledPlugins = cfg.plugins.enabledPlugins || [];
+            if (!cfg.plugins.enabledPlugins.includes(name)) {
+                cfg.plugins.enabledPlugins.push(name);
+                fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + "\n");
+                console.log(`Enabled plugin ${name} in Millennium config.`);
+            } else {
+                console.log(`Plugin ${name} already enabled.`);
+            }
+        ' "$MILLENNIUM_CONFIG" "$PLUGIN_NAME"
+    elif command -v python3 >/dev/null 2>&1; then
+        cp "$MILLENNIUM_CONFIG" "$MILLENNIUM_CONFIG.bak"
+        python3 - "$MILLENNIUM_CONFIG" "$PLUGIN_NAME" <<'EOF'
+import json, sys
+path, name = sys.argv[1], sys.argv[2]
+with open(path) as f:
+    cfg = json.load(f)
+cfg.setdefault("plugins", {}).setdefault("enabledPlugins", [])
+if name not in cfg["plugins"]["enabledPlugins"]:
+    cfg["plugins"]["enabledPlugins"].append(name)
+    with open(path, "w") as f:
+        json.dump(cfg, f, indent=2)
+        f.write("\n")
+    print(f"Enabled plugin {name} in Millennium config.")
+else:
+    print(f"Plugin {name} already enabled.")
+EOF
+    else
+        echo "WARN: neither node nor python3 found - enable the plugin manually in Millennium settings."
+    fi
+fi
 
 echo ""
 echo "=== Done ==="
