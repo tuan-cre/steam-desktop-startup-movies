@@ -38,8 +38,8 @@ fi
 echo "=== Startup Movies installer ==="
 echo "Target: $INSTALL_DIR"
 
-if [[ ! -d "${XDG_DATA_HOME:-$HOME/.local/share}/millennium" && ! -d "$HOME/.millennium" ]]; then
-    echo "WARN: Millennium not found (~/.local/share/millennium). Install first: https://steambrew.app/"
+if [[ ! -d "${XDG_DATA_HOME:-$HOME/.local/share}/millennium" && ! -d "${XDG_CONFIG_HOME:-$HOME/.config}/millennium" && ! -d "$HOME/.millennium" ]]; then
+    echo "WARN: Millennium not found (~/.config/millennium). Install first: https://steambrew.app/"
 fi
 
 if [[ -n "$RELEASE_URL" ]]; then
@@ -98,8 +98,7 @@ if pgrep -x steam >/dev/null 2>&1; then
     echo "WARN: Steam is running - skipping auto-enable (close Steam and re-run, or enable manually in Millennium settings)."
 else
     MILLENNIUM_CONFIG=""
-    for root in "${XDG_DATA_HOME:-$HOME/.local/share}/millennium" "$HOME/.millennium"; do
-        cand="$root/config/config.json"
+    for cand in "${XDG_CONFIG_HOME:-$HOME/.config}/millennium/config.json" "${XDG_DATA_HOME:-$HOME/.local/share}/millennium/config.json" "${XDG_DATA_HOME:-$HOME/.local/share}/millennium/config/config.json" "$HOME/.millennium/config/config.json"; do
         if [[ -f "$cand" ]]; then MILLENNIUM_CONFIG="$cand"; break; fi
     done
     if [[ -z "$MILLENNIUM_CONFIG" ]]; then
