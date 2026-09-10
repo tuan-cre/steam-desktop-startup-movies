@@ -147,35 +147,10 @@ local function find_ffmpeg()
     return nil
 end
 
-local _has_autoplay_flag = nil
-local function has_autoplay_flag()
-    if _has_autoplay_flag ~= nil then return _has_autoplay_flag end
-    -- NOTE: this only observes whether steamwebhelper runs with
-    -- --autoplay-policy (unmuted autoplay available, shipped stock by Steam).
-    -- The result only feeds a log line and an undisplayed status field —
-    -- playback unmutes opportunistically regardless — so on Windows we skip
-    -- the tasklist probe entirely: it costs a console flash every time the
-    -- settings panel loads get_status, for zero visible benefit.
-    if IS_WINDOWS then
-        _has_autoplay_flag = false
-        logger:info("Autoplay-flag probe skipped on Windows (muted-first hybrid fallback)")
-        return false
-    end
-    local h = io.popen("ps aux 2>/dev/null | grep -q 'autoplay-policy' && echo yes || echo no")
-    if h then
-        local r = h:read("*a") or ""
-        h:close()
-        _has_autoplay_flag = r:find("yes") ~= nil
-        if _has_autoplay_flag then
-            logger:info("Observed --autoplay-policy in steamwebhelper cmdline (unmuted autoplay available)")
-        else
-            logger:info("No --autoplay-policy flag - using muted-first hybrid fallback")
-        end
-        return _has_autoplay_flag
-    end
-    _has_autoplay_flag = false
-    return false
-end
+-- NOTE: no autoplay-policy probing (Linux `ps` / Windows `tasklist`).
+-- Playback starts muted and unmutes opportunistically (tryUnmute in the
+-- frontend); the flag only ever fed a log line and an undisplayed status
+-- field, so the probes were pure cost. Steam ships --autoplay-policy stock.
 
 local function ensure_movies_dir()
     if movies_path then
@@ -452,7 +427,6 @@ end
 function get_status()
     return json_encode({
         has_ffmpeg = ffmpeg_bin ~= nil,
-        has_autoplay_flag = has_autoplay_flag(),
         ftp_serving = not IS_WINDOWS,
         data_serving = IS_WINDOWS,
         is_windows = IS_WINDOWS

@@ -27,7 +27,8 @@ let _setBlackScreen: ((v: boolean) => void) | null = null;
 let _transition: "fade" | "none" = (localStorage.getItem(TRANSITION_KEY) as any) || "fade";
 let _mode: "default" | "shuffle" = (localStorage.getItem(MODE_KEY) as any) || "default";
 let _onTransitionChange: ((v: "fade" | "none") => void) | null = null;
-let _audioEnabled: boolean = localStorage.getItem(AUDIO_KEY) === "true";
+// Audio defaults ON (Steam Deck behavior); explicit Off is respected.
+let _audioEnabled: boolean = localStorage.getItem(AUDIO_KEY) !== "false";
 let _onAudioChange: ((v: boolean) => void) | null = null;
 
 async function callBackend(method: string, params: any = {}) {
@@ -272,21 +273,14 @@ async function tryStartupPlayback() {
             movie = movies[0];
         }
     }
-    if (movie?.url) {
-        playMovie(movie.url);
-    } else if (movie?.name) {
-        const url = await resolvePlayUrl(movie);
-        if (url) playMovie(url);
-        else {
-            if (_setBlackScreen) _setBlackScreen(false);
-            else _pendingNoMovies = true;
-            (window as any).__showSteamUI?.();
-        }
-    } else {
-        if (_setBlackScreen) _setBlackScreen(false);
-        else _pendingNoMovies = true;
-        (window as any).__showSteamUI?.();
+    const url = movie ? await resolvePlayUrl(movie) : null;
+    if (url) {
+        playMovie(url);
+        return;
     }
+    if (_setBlackScreen) _setBlackScreen(false);
+    else _pendingNoMovies = true;
+    (window as any).__showSteamUI?.();
 }
 
 tryStartupPlayback().catch((e) => {

@@ -110,6 +110,39 @@ if ($Release -ne "") {
     }
 }
 
+# --- Enable the plugin (Millennium keeps enabledPlugins in config.json) ---
+# Steam must be closed: Millennium rewrites this file on exit/shutdown,
+# which would clobber an edit made while it runs.
+$steamProc = Get-Process steam -ErrorAction SilentlyContinue
+if ($steamProc) {
+    Write-Warning "Steam is running - skipping auto-enable (close Steam and re-run, or enable manually in Millennium settings)."
+} else {
+    $millenniumConfig = $null
+    foreach ($root in @("${Env:ProgramFiles(x86)}\Steam", "$Env:ProgramFiles\Steam")) {
+        $cand = Join-Path $root "millennium\config\config.json"
+        if (Test-Path $cand) { $millenniumConfig = $cand; break }
+    }
+    if ($millenniumConfig) {
+        try {
+            Copy-Item $millenniumConfig "$millenniumConfig.bak" -Force
+            $cfg = Get-Content $millenniumConfig -Raw | ConvertFrom-Json
+            if ($null -eq $cfg.plugins) { $cfg | Add-Member -NotePropertyName plugins -NotePropertyValue (@{}) }
+            if ($null -eq $cfg.plugins.enabledPlugins) { $cfg.plugins | Add-Member -NotePropertyName enabledPlugins -NotePropertyValue (@()) }
+            if ($cfg.plugins.enabledPlugins -notcontains $PluginName) {
+                $cfg.plugins.enabledPlugins += $PluginName
+                $cfg | ConvertTo-Json -Depth 10 | Set-Content $millenniumConfig -Encoding UTF8
+                Write-Host "Enabled plugin '$PluginName' in Millennium config."
+            } else {
+                Write-Host "Plugin '$PluginName' already enabled."
+            }
+        } catch {
+            Write-Warning "Auto-enable failed ($_) - enable manually in Millennium settings."
+        }
+    } else {
+        Write-Warning "Millennium config not found - enable the plugin manually in settings."
+    }
+}
+
 Write-Host ""
 Write-Host "=== Done ==="
 Write-Host "Plugin: $Dir"
