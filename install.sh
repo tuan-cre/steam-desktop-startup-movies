@@ -102,22 +102,6 @@ else
     done
     if [[ -z "$MILLENNIUM_CONFIG" ]]; then
         echo "WARN: Millennium config not found - enable the plugin manually in settings."
-    elif command -v node >/dev/null 2>&1; then
-        cp "$MILLENNIUM_CONFIG" "$MILLENNIUM_CONFIG.bak"
-        node -e '
-            const fs = require("fs");
-            const [cfgPath, name] = process.argv.slice(1);
-            const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
-            cfg.plugins = cfg.plugins || {};
-            cfg.plugins.enabledPlugins = cfg.plugins.enabledPlugins || [];
-            if (!cfg.plugins.enabledPlugins.includes(name)) {
-                cfg.plugins.enabledPlugins.push(name);
-                fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + "\n");
-                console.log(`Enabled plugin ${name} in Millennium config.`);
-            } else {
-                console.log(`Plugin ${name} already enabled.`);
-            }
-        ' "$MILLENNIUM_CONFIG" "$PLUGIN_NAME"
     elif command -v python3 >/dev/null 2>&1; then
         cp "$MILLENNIUM_CONFIG" "$MILLENNIUM_CONFIG.bak"
         python3 - "$MILLENNIUM_CONFIG" "$PLUGIN_NAME" <<'EOF'
@@ -136,7 +120,7 @@ else:
     print(f"Plugin {name} already enabled.")
 EOF
     else
-        echo "WARN: neither node nor python3 found - enable the plugin manually in Millennium settings."
+        echo "WARN: python3 not found - enable the plugin manually in Millennium settings."
     fi
 fi
 
