@@ -2,61 +2,63 @@
 
 Millennium plugin that plays a startup movie on Steam launch, like Steam Deck.
 
+## Demo
+
+![Demo](docs/demo.gif)
+
 ## Install
 
-Linux:
+Requires [Millennium](https://steambrew.app) v3.4.1+.
+
+**Linux**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/tuan-cre/steam-desktop-startup-movies/master/install.sh | bash
 ```
 
-Windows (PowerShell, run as admin):
+**Windows** (PowerShell, run as admin)
 
 ```powershell
 irm https://raw.githubusercontent.com/tuan-cre/steam-desktop-startup-movies/master/install.ps1 | iex
 ```
 
-Or run the local copy:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File install.ps1
-```
-
-Or manual:
-
-```bash
-git clone https://github.com/tuan-cre/steam-desktop-startup-movies ~/.local/share/millennium/plugins/startup-movies
-cd ~/.local/share/millennium/plugins/startup-movies
-npm install && npm run build
-```
-
-Windows manual path is `C:\Program Files (x86)\Steam\millennium\plugins\startup-movies`.
-No python needed on Windows (movies embed directly); ffmpeg is optional
-(thumbnails only).
-
-Requires [Millennium](https://steambrew.app) v3+.
+> Both installers clone the plugin, use the shipped prebuilt frontend
+> (no build needed), and enable it when Steam is closed.
+> Windows needs no python; ffmpeg is optional everywhere (thumbnails only).
 
 ## Movies
 
-Drop video files into the plugin's `movies/` folder and restart Steam.
+Drop video files into the plugin's `movies/` folder, then restart Steam.
 
-Supported: `.webm` `.mp4` `.m4v` `.mov` `.mkv` `.ogv` `.ogg` — whatever Chromium decodes. Unplayable files are skipped.
+- Linux: `~/.local/share/millennium/plugins/startup-movies/movies/`
+- Windows: `C:\Program Files (x86)\Steam\millennium\plugins\startup-movies\movies\`
+
+Or: Steam → Millennium → Plugins → ▾ → Browse local files.
+
+Ships with `Hades.webm`. Supported: `.webm` `.mp4` `.m4v` `.mov` `.mkv` `.ogv` `.ogg` — whatever Chromium decodes. Unplayable files are skipped.
 
 ## Config
 
-Millennium → Settings → Plugins → **Startup Movies**: pick movie, fit, transition, shuffle, audio. Preview plays the selection immediately.
+Steam → Millennium → Plugins → **Startup Movies**: toggle on, then ▾ → Configure.
 
-Requires Steam → Settings → Interface → Startup Location → **Library**, or the Store renders over the movie.
+Pick movie, fit, transition, shuffle, audio. Preview plays immediately.
 
-## Tip
+Set Startup Location to **Library** (Interface settings), otherwise the Store covers the movie.
 
-Turn off Steam → Settings → Interface → "Notify me about additions or changes to my games" so the news popup doesn't cover the movie at launch.
+At launch the movie plays fullscreen — click or let it end for your Library.
+
+## Tips
+
+- Turn off "Notify me about additions or changes to my games" (Interface settings) so the news popup doesn't cover the movie.
+- A few seconds of black screen before the movie is normal Steam boot.
 
 ## Troubleshoot
 
-- No movies — check `movies/` folder, hit Refresh
-- No thumbnail — install ffmpeg
-- No sound — enable Audio
+- Plugin grayed out / no panel → fully quit Steam and relaunch (plugins load at startup only)
+- Store page covers the movie → set Startup Location to **Library** (Interface settings)
+- No movies → check `movies/`, hit Refresh
+- No thumbnail → install ffmpeg
+- No sound → enable Audio
 
 ## License
 
