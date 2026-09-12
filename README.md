@@ -13,18 +13,19 @@ Requires [Millennium](https://steambrew.app) v3.4.1+.
 **Linux**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tuan-cre/steam-desktop-startup-movies/master/install.sh | bash
+git clone --depth 1 https://github.com/tuan-cre/steam-desktop-startup-movies ~/.local/share/millennium/plugins/startup-movies
 ```
 
-**Windows** (PowerShell, run as admin)
+**Windows** (PowerShell)
 
 ```powershell
-irm https://raw.githubusercontent.com/tuan-cre/steam-desktop-startup-movies/master/install.ps1 | iex
+git clone --depth 1 https://github.com/tuan-cre/steam-desktop-startup-movies "${Env:ProgramFiles(x86)}\Steam\millennium\plugins\startup-movies"
 ```
 
-> Both installers clone the plugin, use the shipped prebuilt frontend
-> (no build needed), and enable it when Steam is closed.
-> Windows needs no python; ffmpeg is optional everywhere (thumbnails only).
+> Then enable the plugin (Steam → Millennium → Plugins → toggle on)
+> and restart Steam. If your Millennium lives somewhere else, clone into
+> its `plugins/startup-movies` folder instead.
+> ffmpeg is optional (thumbnails only).
 
 ## Movies
 

@@ -6,8 +6,8 @@ node_modules/
 dist/
 *.log
 movies/*
-!movies/.keep
 !movies/Hades.webm
 !movies/thumbs
 movies/thumbs/*
 !movies/thumbs/Hades.jpg
+frontend/index.js
