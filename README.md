@@ -36,7 +36,7 @@ Drop video files into the plugin's `movies/` folder, then restart Steam.
 
 Or: Steam → Millennium → Plugins → ▾ → Browse local files.
 
-Ships with `Hades.webm`. Supported: `.webm` `.mp4` `.m4v` `.mov` `.mkv` `.ogv` `.ogg` — whatever Chromium decodes. Unplayable files are skipped.
+Ships with `Hades.webm`. Supported: `.webm` `.mp4` `.m4v` `.mov` `.mkv` `.ogv` `.ogg` — whatever Chromium decodes. Unplayable files are skipped. Large files stream in chunks (64 MB cap).
 
 ## Config
 

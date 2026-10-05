@@ -52,11 +52,16 @@ function logToBackend(message: string) {
 }
 
 let _cachedMovies: any[] | null = null;
+let _moviesPromise: Promise<any[]> | null = null;
 
 async function loadMovies(force = false) {
     if (_cachedMovies && !force) return _cachedMovies;
+    // Startup fires tryStartupPlayback + Panel concurrently; share one
+    // in-flight request instead of paying the IPC twice.
+    if (_moviesPromise && !force) return _moviesPromise;
     if (force) {
         _cachedMovies = null;
+        _moviesPromise = null;
         // Ask backend to rescan (falls back to cached list on older backends)
         const refreshed = await callBackend("refresh_movies");
         if (Array.isArray(refreshed)) {
@@ -64,15 +69,23 @@ async function loadMovies(force = false) {
             return _cachedMovies;
         }
     }
-    const result = await callBackend("get_movies");
-    _cachedMovies = Array.isArray(result) ? result : [];
-    return _cachedMovies;
+    _moviesPromise = (async () => {
+        const result = await callBackend("get_movies");
+        _cachedMovies = Array.isArray(result) ? result : [];
+        return _cachedMovies;
+    })();
+    try {
+        return await _moviesPromise;
+    } finally {
+        _moviesPromise = null;
+    }
 }
 
 function formatSize(bytes: number): string {
     if (bytes < 1024) return bytes + " B";
     if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB";
-    return (bytes / 1048576).toFixed(1) + " MB";
+    if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + " MB";
+    return (bytes / 1073741824).toFixed(1) + " GB";
 }
 
 // Starts muted for stock-policy compatibility; unmutes opportunistically
@@ -216,6 +229,7 @@ function StartupMovieOverlay() {
         autoPlay
         muted
         playsInline
+        preload="auto"
         style={{ width: "100%", height: "100%", objectFit, opacity: videoReady ? 1 : 0, transition: transition === "fade" ? "opacity 0.5s ease" : "none" }}
         onEnded={dismiss}
         onError={dismiss}
@@ -238,15 +252,89 @@ function playMovie(url: string) {
     else _pendingPlayUrl = url;
 }
 
-// Windows serves embedded data (no movie.url in the list): fetch the
-// selected file's bytes on demand. Linux URLs come straight from FTP.
+// Windows serves embedded bytes (no movie.url in the list): fetch the
+// selected file on demand and hand <video> a Blob URL (cheaper than a
+// giant data: URL). Linux URLs come straight from FTP.
+// Mirrors SINGLE_SHOT_MAX_BYTES / CHUNK_RAW_BYTES in backend/main.lua.
+const SINGLE_SHOT_MAX_BYTES = 5 * 1024 * 1024;
+const CHUNK_RAW_BYTES = 3 * 1024 * 1024;
+const TOTAL_MAX_BYTES = 64 * 1024 * 1024;
+
+const BLOB_VIDEO_MIME: Record<string, string> = {
+    webm: "video/webm",
+    mp4: "video/mp4",
+    m4v: "video/mp4",
+    mov: "video/quicktime",
+    mkv: "video/x-matroska",
+    ogv: "video/ogg",
+    ogg: "video/ogg",
+};
+
+function mimeForFile(name: string): string {
+    const ext = name.split(".").pop()?.toLowerCase() || "";
+    return BLOB_VIDEO_MIME[ext] || "video/webm";
+}
+
+function b64ToBytes(b64: string): Uint8Array {
+    const bin = atob(b64);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+}
+
+// One live Blob URL at a time; revoked on replace so repeated
+// previews/startups don't leak object URLs.
+let _blobUrl: string | null = null;
+function toBlobUrl(parts: Uint8Array[], mime: string): string {
+    if (_blobUrl) {
+        try { URL.revokeObjectURL(_blobUrl); } catch {}
+        _blobUrl = null;
+    }
+    _blobUrl = URL.createObjectURL(new Blob(parts as BlobPart[], { type: mime }));
+    return _blobUrl;
+}
+
 async function resolvePlayUrl(movie: any): Promise<string | null> {
     if (movie?.url) return movie.url;
-    if (movie?.name) {
-        const d: any = await callBackend("get_movie_data", { name: movie.name });
-        if (typeof d === "string" && d.startsWith("data:")) return d;
+    if (!movie?.name) return null;
+    const mime = mimeForFile(movie.name);
+    const size = typeof movie.size === "number" ? movie.size : 0;
+    if (size > TOTAL_MAX_BYTES) {
+        const msg = `refusing '${movie.name}' (${formatSize(size)} > 64 MB cap)`;
+        console.warn("[StartupMovies] " + msg);
+        logToBackend(msg);
+        return null;
     }
-    return null;
+    try {
+        // Fast path: small files in one IPC roundtrip.
+        if (!size || size <= SINGLE_SHOT_MAX_BYTES) {
+            const d: any = await callBackend("get_movie_data", { name: movie.name });
+            if (typeof d === "string" && d.startsWith("data:")) {
+                return toBlobUrl([b64ToBytes(d.slice(d.indexOf(",") + 1))], mime);
+            }
+            if (size && size <= SINGLE_SHOT_MAX_BYTES) return null;
+            // Unknown size with failed single-shot: fall through to chunks.
+        }
+        // Chunked path: sequential slices, each far under the IPC
+        // return cap. Array args keep positional order on every backend.
+        const parts: Uint8Array[] = [];
+        let offset = 0;
+        while (true) {
+            const len = size ? Math.min(CHUNK_RAW_BYTES, size - offset) : CHUNK_RAW_BYTES;
+            if (len <= 0) break;
+            const c: any = await callBackend("get_movie_chunk", [movie.name, offset, len] as any);
+            if (typeof c !== "string" || !c) return null;
+            const bytes = b64ToBytes(c);
+            parts.push(bytes);
+            offset += bytes.length;
+            if (bytes.length < len) break; // short read = EOF
+        }
+        if (!parts.length) return null;
+        return toBlobUrl(parts, mime);
+    } catch (e) {
+        logToBackend("resolvePlayUrl failed: " + String((e as any)?.message || e));
+        return null;
+    }
 }
 
 async function tryStartupPlayback() {

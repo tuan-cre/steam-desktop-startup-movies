@@ -28,6 +28,14 @@ local FTP_BASE = "https://millennium.ftp"
 
 local DATA_MAX_BYTES = 64 * 1024 * 1024
 
+-- Millennium v3.5.0+ caps a single backend return at ~8MB on the wire
+-- (kMaxReturnValueSize), so one-shot base64 delivery tops out around ~5MB
+-- raw. Bigger files arrive in slices (get_movie_chunk) reassembled by the
+-- frontend. Slices stay far under the cap; raw size needs no 3-byte
+-- alignment because the frontend decodes each slice to bytes independently.
+local CHUNK_RAW_BYTES = 3 * 1024 * 1024
+local SINGLE_SHOT_MAX_BYTES = 5 * 1024 * 1024
+
 local DATA_VIDEO_MIME = {
     [".webm"] = "video/webm",
     [".mp4"] = "video/mp4",
@@ -86,6 +94,16 @@ local function trim(s)
     return (s or ""):match("^%s*(.-)%s*$")
 end
 
+local function base64_encode_bytes(s)
+    local has_utils, utils = pcall(require, "utils")
+    if not has_utils or not utils or not utils.base64_encode then
+        return nil
+    end
+    local b64 = utils.base64_encode(s)
+    if not b64 or b64 == "" then return nil end
+    return b64
+end
+
 local function base64_of_file(abs_path)
     local f = io.open(abs_path, "rb")
     if not f then return nil end
@@ -94,13 +112,19 @@ local function base64_of_file(abs_path)
     if #bytes == 0 or #bytes > DATA_MAX_BYTES then
         return nil, #bytes
     end
-    local has_utils, utils = pcall(require, "utils")
-    if not has_utils or not utils or not utils.base64_encode then
-        return nil, #bytes
-    end
-    local b64 = utils.base64_encode(bytes)
-    if not b64 or b64 == "" then return nil, #bytes end
+    local b64 = base64_encode_bytes(bytes)
+    if not b64 then return nil, #bytes end
     return b64, #bytes
+end
+
+local function base64_of_slice(abs_path, offset, length)
+    local f = io.open(abs_path, "rb")
+    if not f then return nil end
+    f:seek("set", offset)
+    local bytes = f:read(length) or ""
+    f:close()
+    if #bytes == 0 then return nil end
+    return base64_encode_bytes(bytes)
 end
 
 local function find_ffmpeg()
@@ -310,8 +334,9 @@ function get_movies()
                             }
                             if IS_WINDOWS then
                                 -- Windows: URLs resolve on demand via
-                                -- get_movie_data / get_thumb_data (embedded
-                                -- data). Nothing to spawn or serve here.
+                                -- get_movie_data (small) / get_movie_chunk
+                                -- (large), assembled to Blob URLs up front.
+                                -- Nothing to spawn or serve here.
                                 item.has_thumb = generate_thumbnail(fs.join(path, name), name) ~= nil
                             else
                                 local abs_path = fs.join(path, name)
@@ -352,7 +377,8 @@ function refresh_movies()
 end
 
 -- Windows: embed one movie as a data URL (the one about to play).
--- Single-file weight only; oversized files are refused.
+-- Single-shot fast path for small files only; the ~8MB IPC return cap
+-- (Millennium v3.5.0+) fits ~5MB raw. Larger files use get_movie_chunk.
 function get_movie_data(arg)
     local name = clean_name(arg)
     if not name then return nil end
@@ -363,9 +389,26 @@ function get_movie_data(arg)
         if not is_video then return nil end
         local abs = fs.join(path, name)
         if not fs.exists(abs) then return nil end
+        -- Stat before reading: a large file must not be fully read and
+        -- base64'd (~33% transient bloat) only to be refused afterwards.
+        local ok_size, fsize = pcall(fs.file_size, abs)
+        if ok_size and type(fsize) == "number" then
+            if fsize == 0 or fsize > DATA_MAX_BYTES then
+                logger:warn("get_movie_data: '" .. name .. "' size " .. tostring(fsize) .. " out of range")
+                return nil
+            end
+            if fsize > SINGLE_SHOT_MAX_BYTES then
+                logger:info("get_movie_data: '" .. name .. "' too large for single-shot, use get_movie_chunk")
+                return nil
+            end
+        end
         local b64, size = base64_of_file(abs)
         if not b64 then
             logger:warn("get_movie_data: '" .. name .. "' unreadable or size " .. tostring(size) .. " out of range")
+            return nil
+        end
+        if size > SINGLE_SHOT_MAX_BYTES then
+            logger:info("get_movie_data: '" .. name .. "' too large for single-shot, use get_movie_chunk")
             return nil
         end
         return "data:" .. (DATA_VIDEO_MIME[ext] or "video/webm") .. ";base64," .. b64
@@ -375,6 +418,46 @@ function get_movie_data(arg)
         return nil
     end
     return url
+end
+
+-- Windows: one base64 slice of a movie. Positional primitives
+-- (name, offset, length) so it works on pre-table FFI too; a single
+-- {name=..., offset=..., length=...} table is also accepted.
+-- Each slice is independently decodable; the frontend reassembles bytes.
+function get_movie_chunk(a, b, c)
+    local name, offset, length
+    if type(a) == "table" then
+        name = clean_name(a)
+        offset = tonumber(a.offset) or 0
+        length = tonumber(a.length) or 0
+    else
+        name = clean_name(a)
+        offset = tonumber(b) or 0
+        length = tonumber(c) or 0
+    end
+    if not name then return nil end
+    if offset < 0 or length <= 0 then return nil end
+    if length > CHUNK_RAW_BYTES then length = CHUNK_RAW_BYTES end
+    local ok, b64 = pcall(function()
+        local path = ensure_movies_dir()
+        if not path then return nil end
+        if not is_video_file(name) then return nil end
+        local abs = fs.join(path, name)
+        if not fs.exists(abs) then return nil end
+        -- Clamp against EOF so a stale size never causes a wasted read;
+        -- past-EOF offset is a clean miss, not an error.
+        local ok_size, fsize = pcall(fs.file_size, abs)
+        if ok_size and type(fsize) == "number" then
+            if offset >= fsize then return nil end
+            if offset + length > fsize then length = fsize - offset end
+        end
+        return base64_of_slice(abs, offset, length)
+    end)
+    if not ok then
+        logger:warn("get_movie_chunk failed: " .. tostring(b64))
+        return nil
+    end
+    return b64
 end
 
 -- Windows: embed one thumbnail as a data URL (tiny jpg).
@@ -445,5 +528,6 @@ return {
     get_status = get_status,
     log_message = log_message,
     get_movie_data = get_movie_data,
+    get_movie_chunk = get_movie_chunk,
     get_thumb_data = get_thumb_data
 }
