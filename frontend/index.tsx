@@ -18,14 +18,19 @@ const TRANSITION_KEY = "startup-movies-transition";
 const MODE_KEY = "startup-movies-mode";
 const AUDIO_KEY = "startup-movies-audio";
 
+function readOption<T extends string>(key: string, options: readonly T[], fallback: T): T {
+    const value = localStorage.getItem(key);
+    return options.find(option => option === value) || fallback;
+}
+
 let _overlayPlay: ((url: string) => void) | null = null;
 let _pendingPlayUrl: string | null = null;
 let _pendingNoMovies = false;
-let _objectFit: "contain" | "cover" | "fill" = (localStorage.getItem(OBJECT_FIT_KEY) as any) || "contain";
+let _objectFit = readOption(OBJECT_FIT_KEY, ["contain", "cover", "fill"], "contain");
 let _onObjectFitChange: ((v: "contain" | "cover" | "fill") => void) | null = null;
 let _setBlackScreen: ((v: boolean) => void) | null = null;
-let _transition: "fade" | "none" = (localStorage.getItem(TRANSITION_KEY) as any) || "fade";
-let _mode: "default" | "shuffle" = (localStorage.getItem(MODE_KEY) as any) || "default";
+let _transition = readOption(TRANSITION_KEY, ["fade", "none"], "fade");
+let _mode = readOption(MODE_KEY, ["default", "shuffle"], "default");
 let _onTransitionChange: ((v: "fade" | "none") => void) | null = null;
 // Audio defaults ON (Steam Deck behavior); explicit Off is respected.
 let _audioEnabled: boolean = localStorage.getItem(AUDIO_KEY) !== "false";
