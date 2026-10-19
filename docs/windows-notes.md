@@ -1,59 +1,59 @@
-# Windows support — notes
+# Windows notes
 
-## Serving model (final)
-- Linux: FTP VFS (`https://millennium.ftp`). Unchanged.
-- Windows: embedded base64 data URLs (no server, no python, no port).
-  One movie is ever embedded at a time; files over 64MB are refused
-  (`DATA_MAX_BYTES` in `backend/main.lua`).
+Same plugin, same goal as Linux (play a startup movie on launch), but Windows
+can't use the Linux FTP path, so it serves movies a different way.
 
-## History
-Deleted branch: `windows-support` (was a mess, outdated vs master).
-Full history still on origin until deleted; diary was `WINDOWS-SUPPORT.md` on that branch.
+Source paths below are relative to the Millennium repo root.
 
-## Goal
-Same plugin on Windows: play startup movie on Steam launch.
+## Serving model
+- **Linux:** FTP virtual filesystem (`https://millennium.ftp`), no size limit.
+- **Windows:** movies are embedded as base64 data URLs — no server, no Python,
+  no port, no spawned process. One movie is ever embedded at a time, so peak
+  memory is ~1.33× the file. `DATA_MAX_BYTES` (64 MB) caps it, enforced on both
+  ends: `get_movie_chunk` clamps to the ceiling, and the frontend aborts the
+  chunk loop if the running total exceeds it (covers an unknown `size`).
 
-## Root cause found (verified in Millennium source, Sep 2026)
-Millennium's FTP VFS (`https://millennium.ftp`) can't serve video on Windows:
-- `src/engine/http_hooks.cc:173` opens files with `std::ifstream(path)` —
-  text mode. On Windows text reads stop at the first `0x1A` byte, which every
-  WebM starts with (EBML magic). Result: empty body,
-  `MEDIA_ERR_SRC_NOT_SUPPORTED`, black screen. Linux reads the same code path
-  but its text==binary for bytes, so it works there.
-- `src/include/millennium/mime_types.h:30` has no video types at all
-  (CSS/JS/fonts/images/HTML only). Video falls through to `UNKNOWN` ->
-  `Content-Type: text/plain` and the text-read branch (`is_bin_file` false).
-- URL layer is fine on Windows (`plat_encode_url` / `get_path_from_url` in
-  `src/include/millennium/url_parser.h` handle `C:\...` paths), so a C++ fix
-  would be small (binary mode + video MIME rows) but is out of scope for this
-  plugin — we work around it below.
+## Why FTP can't serve video on Windows
+- The VFS opens files with a plain `std::ifstream` (`src/engine/http_hooks.cc`)
+  — text mode. On Windows text reads stop at the first `0x1A` byte, which every
+  WebM starts with (EBML magic). The body comes back empty, so Chromium raises
+  `MEDIA_ERR_SRC_NOT_SUPPORTED` and the overlay dismisses after a black flash.
+  Linux reads the same code path, but there text == binary, so it works.
+- `src/include/millennium/mime_types.h` has no video rows (CSS/JS/fonts/images/
+  HTML only), so video falls through to `UNKNOWN` → `Content-Type: text/plain`
+  and the text-read branch.
+- The URL layer is fine on Windows (`plat_encode_url` / `get_path_from_url` in
+  `src/include/millennium/url_parser.h` handle `C:\…` paths), so the upstream
+  fix would be small (binary mode + video MIME rows). That's out of scope here,
+  so we work around it.
 
-## Verdict: FTP confirmed dead on Windows (tested Sep 2026)
-A/B experiment in the real client, same file (`blue-archive.webm`):
-- `http://127.0.0.1:18080/blue-archive.webm` → plays, audio works.
-- `https://millennium.ftp/c%3A/program%20files%20%28x86%29/.../blue-archive.webm`
-  → 0.1s black flash then instant dismiss (`onError`), repeatable.
-Matches the code diagnosis exactly (text-mode read → empty body +
-`text/plain` MIME → `MEDIA_ERR_SRC_NOT_SUPPORTED`).
+An A/B test in a real client confirmed it: the same file plays over
+`http://127.0.0.1:18080/…`, but gives a 0.1s black flash then an instant dismiss
+over the FTP URL, repeatably — matching the text-mode / `text/plain` diagnosis.
 
-## Detour: local http.server (tried, then removed)
-An intermediate port served `movies/` over `http://127.0.0.1:18080` via
-`pythonw -m http.server` (Store-stub rejection, single-console launch,
-spawn-free polling). It worked end-to-end (video + audio + thumbs), but every
-`io.popen`/`os.execute` flashes a console at Steam launch, and combining
-launch+validate into one console exposed a pipe-inheritance hang
-(`read()` blocks until the detached child exits — forever). Embedded data
-URLs achieve the same with zero processes, so the server was deleted.
-Lessons kept: `fs.exists` pre-filters before any probe, `utils.base64_encode`
-/ `http` builtins over shell-outs, `pcall` the startup path.
+## Processes
+ffmpeg is the only process the plugin ever spawns, and only to create a missing
+thumbnail:
+- Spawns are debounced per thumbnail (`THUMB_RETRY_SECONDS` in
+  `backend/main.lua`), so `get_movies` rescans don't stack jobs.
+- Finding ffmpeg is subprocess-free on Windows: `find_ffmpeg` scans `PATH` and
+  the common install dirs with `fs.exists`, instead of `where` (which flashed a
+  console on every Steam launch). Linux still uses `which` — no console there.
+- Residual: the ffmpeg thumbnail job itself still shells out once per new movie
+  (`start /B`), so that single flash can appear while a thumbnail is missing.
+  Making it flash-free needs a non-blocking, no-window spawn; `utils.exec` is
+  `CREATE_NO_WINDOW` but blocking, so it would stall the startup scan.
 
-## Facts that may have shifted
-- Master is now v1.3.0: source-of-truth is `frontend/index.tsx` (ttc
-  compiles it to `.millennium/Dist/index.js` at build; both the Dist
-  output and the `frontend/` copy are committed so installs need no
-  build), multi-format support, no Startup Location detection,
-  no Millennium patch needed (Steam ships `--autoplay-policy` stock).
-- Correct Windows install path is
-  `C:\Program Files (x86)\Steam\millennium\plugins\startup-movies`
-  (not `%LOCALAPPDATA%\millennium\...`). No python needed; ffmpeg optional
-  (thumbnails). Installer: `install.ps1`.
+## Detour worth remembering
+An early version served `movies/` over a local `pythonw -m http.server`. It
+worked end-to-end, but every `io.popen` / `os.execute` flashes a console at
+Steam launch, and combining launch + validate into one console exposed a
+pipe-inheritance hang (`read()` blocks until the detached child exits).
+Embedded data URLs do the same with zero processes, so the server was removed.
+Lessons kept: `fs.exists` pre-filters before any probe, use `utils.base64_encode`
+over shell-outs, and `pcall` the startup path.
+
+## Layout
+- Install path: `C:\Program Files (x86)\Steam\millennium\plugins\startup-movies`
+  (not `%LOCALAPPDATA%\millennium\…`).
+- No Python needed; ffmpeg optional (thumbnails). Installer: `install.ps1`.
