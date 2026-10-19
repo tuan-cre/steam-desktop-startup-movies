@@ -324,12 +324,23 @@ async function resolvePlayUrl(movie: any): Promise<string | null> {
         // return cap. Array args keep positional order on every backend.
         const parts: Uint8Array[] = [];
         let offset = 0;
+        let total = 0;
         while (true) {
             const len = size ? Math.min(CHUNK_RAW_BYTES, size - offset) : CHUNK_RAW_BYTES;
             if (len <= 0) break;
             const c: any = await callBackend("get_movie_chunk", [movie.name, offset, len] as any);
             if (typeof c !== "string" || !c) return null;
             const bytes = b64ToBytes(c);
+            // Guard the unknown-size case (size === 0 skips the cap check
+            // above): never buffer past the same 64 MB ceiling the backend
+            // enforces, no matter what the list claimed.
+            total += bytes.length;
+            if (total > TOTAL_MAX_BYTES) {
+                const msg = `refusing '${movie.name}' (> 64 MB cap during chunked read)`;
+                console.warn("[StartupMovies] " + msg);
+                logToBackend(msg);
+                return null;
+            }
             parts.push(bytes);
             offset += bytes.length;
             if (bytes.length < len) break; // short read = EOF

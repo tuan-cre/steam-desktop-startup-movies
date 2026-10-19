@@ -130,36 +130,41 @@ end
 local function find_ffmpeg()
     if ffmpeg_bin then return ffmpeg_bin end
     if IS_WINDOWS then
-        -- fs.exists checks first: `where` flashes a console, so it stays
-        -- the fallback. (Thumbnail generation is the only remaining spawn,
-        -- and only fires while a thumb is missing.)
+        -- fs.exists checks only: never spawn a probe. `where` flashes a
+        -- console at every Steam launch, which is exactly what the
+        -- embedded-data design removed. Scan PATH directly instead, so a
+        -- PATH-installed ffmpeg is still found without a subprocess.
+        local candidates = {}
         local localapp = os.getenv("LOCALAPPDATA") or ""
         local pfiles = os.getenv("ProgramFiles") or "C:\\Program Files"
-        local abs = {}
         if localapp ~= "" then
-            abs[#abs + 1] = localapp .. "\\Microsoft\\WinGet\\Links\\ffmpeg.exe"
+            candidates[#candidates + 1] = localapp .. "\\Microsoft\\WinGet\\Links\\ffmpeg.exe"
         end
-        abs[#abs + 1] = pfiles .. "\\ffmpeg\\bin\\ffmpeg.exe"
-        abs[#abs + 1] = "C:\\ffmpeg\\bin\\ffmpeg.exe"
-        for _, exe in ipairs(abs) do
+        candidates[#candidates + 1] = pfiles .. "\\ffmpeg\\bin\\ffmpeg.exe"
+        candidates[#candidates + 1] = "C:\\ffmpeg\\bin\\ffmpeg.exe"
+        for entry in (os.getenv("PATH") or ""):gmatch("[^;]+") do
+            local entry_dir = entry:gsub('"', "")
+            entry_dir = entry_dir:gsub("[\\/]+$", "")
+            if entry_dir ~= "" then
+                candidates[#candidates + 1] = entry_dir .. "\\ffmpeg.exe"
+            end
+        end
+        for _, exe in ipairs(candidates) do
             if fs.exists(exe) then
                 ffmpeg_bin = exe
                 logger:info("Found ffmpeg: " .. ffmpeg_bin)
                 return ffmpeg_bin
             end
         end
+        logger:warn("ffmpeg not found (checked PATH and common install dirs) - thumbnail generation disabled")
+        return nil
     end
-    local probe
-    if IS_WINDOWS then
-        probe = "where ffmpeg 2>NUL"
-    else
-        probe = "which ffmpeg 2>/dev/null"
-    end
-    local handle = io.popen(probe)
+
+    -- Linux/macOS: `which` spawns no console, so shelling out is fine.
+    local handle = io.popen("which ffmpeg 2>/dev/null")
     if handle then
         local result = trim(handle:read("*a") or "")
         handle:close()
-        -- `where` can list several lines; take the first .exe that exists.
         local first = result:match("([^\r\n]+)")
         if first and first ~= "" then
             ffmpeg_bin = trim(first)
@@ -215,6 +220,23 @@ local function thumb_name_for(movie_name)
     return base .. ".jpg"
 end
 
+-- Thumbnails are generated fire-and-forget (ffmpeg runs in the
+-- background), so there's no completion signal to observe. Debounce per
+-- thumbnail path: without this, every get_movies scan (startup plus the
+-- frontend's rescan retries) re-spawns ffmpeg for the same missing thumb.
+local THUMB_RETRY_SECONDS = 30
+local thumb_attempts = {}
+
+local function thumb_debounced(thumb_path)
+    local now = os.time()
+    local last = thumb_attempts[thumb_path]
+    if last and (now - last) < THUMB_RETRY_SECONDS then
+        return true
+    end
+    thumb_attempts[thumb_path] = now
+    return false
+end
+
 local function generate_thumbnail(movie_path, movie_name)
     if not thumbs_path or not ffmpeg_bin then return nil end
 
@@ -223,6 +245,9 @@ local function generate_thumbnail(movie_path, movie_name)
         local thumb_path = fs.join(thumbs_path, thumb_name)
 
         if not fs.exists(thumb_path) then
+            -- One spawn per thumb per debounce window; concurrent
+            -- thumbnail jobs are bounded by the number of distinct movies.
+            if thumb_debounced(thumb_path) then return nil end
             local cmd
             if IS_WINDOWS then
                 cmd = string.format(
@@ -255,7 +280,12 @@ end
 
 function json_encode(obj)
     if type(obj) == "string" then
-        return '"' .. obj:gsub('"', '\\"'):gsub('\n', '\\n'):gsub('\r', '\\r'):gsub('\t', '\\t') .. '"'
+        -- Backslash first: it must not double the escapes added after it.
+        -- Remaining control chars (the old \n\r\t cases included) become
+        -- \uXXXX so arbitrary filenames / log lines stay valid JSON.
+        local s = obj:gsub("\\", "\\\\"):gsub('"', '\\"')
+        s = s:gsub("%c", function(c) return string.format("\\u%04x", string.byte(c)) end)
+        return '"' .. s .. '"'
     elseif type(obj) == "number" then
         return tostring(obj)
     elseif type(obj) == "boolean" then
@@ -438,6 +468,11 @@ function get_movie_chunk(a, b, c)
     if not name then return nil end
     if offset < 0 or length <= 0 then return nil end
     if length > CHUNK_RAW_BYTES then length = CHUNK_RAW_BYTES end
+    -- Never serve past the embed cap: a chunked read must respect the same
+    -- 64MB ceiling as get_movie_data/get_movies. A missing size on the
+    -- frontend must not turn into an unbounded read.
+    if offset >= DATA_MAX_BYTES then return nil end
+    if offset + length > DATA_MAX_BYTES then length = DATA_MAX_BYTES - offset end
     local ok, b64 = pcall(function()
         local path = ensure_movies_dir()
         if not path then return nil end
