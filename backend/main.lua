@@ -524,9 +524,9 @@ local function on_load()
         logger:info("Startup Movies plugin loaded (dev/ftp VFS - no python server)")
     end
 
-    millennium.add_browser_css("frontend/steam-hide.css")
-    millennium.add_browser_js("frontend/steam-hide.js")
-
+    -- The Steam UI pre-hide lives in the frontend bundle: Millennium serves
+    -- add_browser_css/js paths from <millennium>/themes/, not the plugin dir,
+    -- so relative plugin paths silently 404.
     find_ffmpeg()
     get_movies()
     if IS_WINDOWS then

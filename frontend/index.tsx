@@ -12,6 +12,46 @@ import {
 import React from "react";
 
 const OVERLAY_ID = "StartupMovieOverlay";
+const HIDE_STYLE_ID = "startup-movies-hide";
+
+// Inline pre-hide stylesheet, injected from the bundle itself.
+//
+// Millennium's add_browser_css/add_browser_js serve hook paths from
+// <millennium>/themes/ (src/engine/http_hooks.cc:298-301 +
+// plugin_loader.cc:677-678), never from the plugin directory, so the old
+// `millennium.add_browser_css("frontend/steam-hide.css")` call silently
+// 404'd ("https://millennium.host/v1/themes/frontend/steam-hide.js" in the
+// webhelper log) and the pre-hide never applied. Serving it needs a path
+// relative to themes/ on Linux, so inject the rules directly instead.
+//
+// `visibility` rather than `opacity`: global components (this overlay)
+// render inside Steam's app root (router-hook.tsx), and an ancestor's
+// opacity:0 is a compositing group that no child can escape. visibility is
+// inherited but overridable, so the overlay can re-enable itself.
+function hideSteamUI() {
+    if (document.getElementById(HIDE_STYLE_ID)) return;
+    const style = document.createElement("style");
+    style.id = HIDE_STYLE_ID;
+    style.textContent =
+        "body { visibility: hidden !important; }\n" +
+        "#" + OVERLAY_ID + ", #" + OVERLAY_ID + " * { visibility: visible !important; }";
+    (document.head || document.documentElement).appendChild(style);
+}
+
+function showSteamUI() {
+    document.getElementById(HIDE_STYLE_ID)?.remove();
+}
+
+// Hide as early as possible: the bundle is evaluated before React mounts.
+hideSteamUI();
+
+// Failsafe: never leave Steam's UI hidden when the overlay isn't on screen
+// (module error, non-desktop UI mode). Checks the DOM rather than module
+// state so it still works if the rest of this module failed to evaluate.
+setTimeout(() => {
+    if (!document.getElementById(OVERLAY_ID)) showSteamUI();
+}, 5000);
+
 const OBJECT_FIT_KEY = "startup-movies-object-fit";
 const MOVIE_KEY = "startup-movies-selected";
 const TRANSITION_KEY = "startup-movies-transition";
@@ -131,21 +171,30 @@ function StartupMovieOverlay() {
     const [audioEnabled, setAudioEnabled] = React.useState(_audioEnabled);
     const videoRef = React.useRef<HTMLVideoElement>(null);
     const fadingRef = React.useRef(false);
+    // Bumped for every new playback so a pending dismiss timeout (the fade)
+    // can't tear down a movie that started in the meantime.
+    const generationRef = React.useRef(0);
+    const dismissTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const cancelDismissTimer = React.useCallback(() => {
+        if (dismissTimerRef.current) {
+            clearTimeout(dismissTimerRef.current);
+            dismissTimerRef.current = null;
+        }
+    }, []);
+
+    const beginPlayback = React.useCallback((url: string) => {
+        generationRef.current += 1;
+        cancelDismissTimer();
+        hideSteamUI();
+        fadingRef.current = false;
+        setVisible(true);
+        setVideoReady(false);
+        setVideoUrl(url);
+    }, [cancelDismissTimer]);
 
     React.useEffect(() => {
-        requestAnimationFrame(() => {
-            var bo = document.getElementById('millennium-black-overlay');
-            if (bo) bo.remove();
-            var prehide = document.getElementById('millennium-prehide');
-            if (prehide) prehide.remove();
-        });
-
-        _overlayPlay = (url: string) => {
-            setVisible(true);
-            fadingRef.current = false;
-            setVideoReady(false);
-            setVideoUrl(url);
-        };
+        _overlayPlay = beginPlayback;
         _setBlackScreen = setBlackScreen;
         _onObjectFitChange = setObjectFit;
         _onTransitionChange = setTransition;
@@ -153,25 +202,23 @@ function StartupMovieOverlay() {
 
         if (_pendingNoMovies) {
             setBlackScreen(false);
-            (window as any).__showSteamUI?.();
+            showSteamUI();
             _pendingNoMovies = false;
         }
         if (_pendingPlayUrl) {
-            setVisible(true);
-            fadingRef.current = false;
-            setVideoReady(false);
-            setVideoUrl(_pendingPlayUrl);
+            beginPlayback(_pendingPlayUrl);
             _pendingPlayUrl = null;
         }
 
         return () => {
+            cancelDismissTimer();
             _overlayPlay = null;
             _setBlackScreen = null;
             _onObjectFitChange = null;
             _onTransitionChange = null;
             _onAudioChange = null;
         };
-    }, []);
+    }, [beginPlayback, cancelDismissTimer]);
 
     const handleVideoReady = React.useCallback(() => {
         setVideoReady(true);
@@ -194,9 +241,18 @@ function StartupMovieOverlay() {
     const dismiss = React.useCallback(() => {
         if (fadingRef.current) return;
         fadingRef.current = true;
+        const gen = generationRef.current;
         setVisible(false);
         setBlackScreen(false);
-        setTimeout(() => {
+        // Reveal Steam immediately so the fade cross-fades to the real UI
+        // instead of fading to black and popping the UI in afterwards.
+        showSteamUI();
+        cancelDismissTimer();
+        dismissTimerRef.current = setTimeout(() => {
+            dismissTimerRef.current = null;
+            // A new preview/startup began during the fade: leave its video
+            // alone.
+            if (gen !== generationRef.current) return;
             if (videoRef.current) {
                 videoRef.current.pause();
                 videoRef.current.removeAttribute("src");
@@ -205,9 +261,8 @@ function StartupMovieOverlay() {
             setVideoUrl(null);
             setVideoReady(false);
             fadingRef.current = false;
-            (window as any).__showSteamUI?.();
         }, dismissTimeout);
-    }, [dismissTimeout]);
+    }, [dismissTimeout, cancelDismissTimer]);
 
     // Unmount entirely when idle (no video and no black screen) so the
     // fullscreen layer can't intercept or disturb Steam/Millennium
@@ -329,7 +384,15 @@ async function resolvePlayUrl(movie: any): Promise<string | null> {
             const len = size ? Math.min(CHUNK_RAW_BYTES, size - offset) : CHUNK_RAW_BYTES;
             if (len <= 0) break;
             const c: any = await callBackend("get_movie_chunk", [movie.name, offset, len] as any);
-            if (typeof c !== "string" || !c) return null;
+            if (typeof c !== "string" || !c) {
+                // The backend returns nil past EOF. With an unknown size we
+                // request a full slice even at EOF, so a miss after bytes
+                // were read means "done", not "failed" — otherwise a file
+                // that is an exact multiple of CHUNK_RAW_BYTES would be
+                // discarded in full.
+                if (offset > 0) break;
+                return null;
+            }
             const bytes = b64ToBytes(c);
             // Guard the unknown-size case (size === 0 skips the cap check
             // above): never buffer past the same 64 MB ceiling the backend
@@ -361,7 +424,7 @@ async function tryStartupPlayback() {
         } else {
             _pendingNoMovies = true;
         }
-        (window as any).__showSteamUI?.();
+        showSteamUI();
         return;
     }
 
@@ -383,13 +446,16 @@ async function tryStartupPlayback() {
     }
     if (_setBlackScreen) _setBlackScreen(false);
     else _pendingNoMovies = true;
-    (window as any).__showSteamUI?.();
+    showSteamUI();
 }
 
 tryStartupPlayback().catch((e) => {
     const msg = "startup playback failed: " + String(e?.message || e);
     console.error("[StartupMovies] " + msg);
     logToBackend(msg);
+    // The pre-hide is already applied at module scope; make sure a failed
+    // startup doesn't leave Steam's UI invisible.
+    showSteamUI();
 });
 
 function Panel() {
